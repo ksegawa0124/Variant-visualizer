@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react';
 import { aa3, aaClass, AA_JA } from '../lib/codon';
+import { buildProteinView } from '../lib/seqview';
+import { renderProteinComparison, safeFileName } from '../lib/exportImage';
+import { ExportButtons } from './ExportButtons';
 import { CONSEQUENCE_INFO, type VariantAnalysis } from '../lib/variant';
 
 interface Props {
@@ -49,18 +52,7 @@ export function ProteinCompare({ analysis }: Props) {
   const altP = analysis.altProtein;
   const changeStart = analysis.proteinChangeStart;
 
-  const window = useMemo(() => {
-    const anchor = (changeStart ?? 1) - 1;
-    const before = 12;
-    const divergent =
-      analysis.consequence === 'frameshift' || analysis.consequence === 'stop_loss' ? 36 : 12;
-    const start = Math.max(0, anchor - before);
-    const end = Math.min(Math.max(refP.length, altP.length), anchor + divergent + 1);
-    return { start, end };
-  }, [analysis.consequence, changeStart, refP.length, altP.length]);
-
-  const positions: number[] = [];
-  for (let i = window.start; i < window.end; i += 1) positions.push(i);
+  const { positions } = useMemo(() => buildProteinView(analysis), [analysis]);
 
   const copy = async (key: string, text: string) => {
     try {
@@ -187,6 +179,11 @@ export function ProteinCompare({ analysis }: Props) {
           <span className="swatch residue-changed" /> 参照と異なる残基
         </li>
       </ul>
+
+      <ExportButtons
+        render={() => renderProteinComparison(analysis, { threeLetter })}
+        fileName={safeFileName(analysis, 'protein')}
+      />
 
       <div className="downloads">
         <button

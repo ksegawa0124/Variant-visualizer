@@ -601,6 +601,18 @@ button:disabled {
   align-items: flex-end;
 }
 
+/*
+ * DNA の各行（目盛り・塩基・コドン枠）は同じ幅の列を持つグリッドにする。
+ * コドン枠は grid-column: span N で塩基セルと同じ列をまたぐため、
+ * 余白やボーダーの誤差が累積してずれることが構造的に起きない。
+ */
+.seq-track .seq-line {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: var(--cell);
+  align-items: end;
+}
+
 .cell {
   flex: 0 0 var(--cell);
   width: var(--cell);
@@ -674,14 +686,14 @@ button:disabled {
 }
 
 .codon {
-  flex: 0 0 auto;
+  /* 幅はグリッドの列（塩基セルと同じ）が決めるため、余白は一切持たせない */
+  min-width: 0;
   text-align: center;
   font-family: var(--mono);
   font-size: 0.72rem;
   line-height: 1.15rem;
   border: 1px solid var(--border-strong);
   border-radius: 3px;
-  margin-right: 1px;
   background: var(--surface-2);
   position: relative;
   overflow: hidden;
@@ -869,7 +881,13 @@ button:disabled {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+  align-items: center;
   margin-top: 1rem;
+}
+
+.export-error {
+  font-size: 0.78rem;
+  color: var(--high);
 }
 
 /* ---------- 状態表示 ---------- */

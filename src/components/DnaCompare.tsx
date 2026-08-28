@@ -1,185 +1,84 @@
 import { useMemo, useState } from 'react';
 import { aa3 } from '../lib/codon';
+import { buildDnaView, type Cell, type CodonGroup } from '../lib/seqview';
 import { indexToCLabel, type VariantAnalysis } from '../lib/variant';
+import { renderDnaComparison, safeFileName } from '../lib/exportImage';
+import { ExportButtons } from './ExportButtons';
 
 interface Props {
   analysis: VariantAnalysis;
 }
 
-interface Cell {
-  base: string;
-  /** その配列上の 0-based インデックス */
-  index: number;
-  codonIndex: number | null;
-  changed: boolean;
-}
-
-interface CodonGroup {
-  codonIndex: number | null;
-  span: number;
-  aa: string | null;
-  changed: boolean;
-  partial: boolean;
-}
-
 const FLANK_OPTIONS = [15, 30, 60];
-
-function buildCells(
-  seq: string,
-  winStart: number,
-  count: number,
-  cdsStart: number,
-  cdsEndExclusive: number,
-  changeFrom: number,
-  changeTo: number,
-): Cell[] {
-  const cells: Cell[] = [];
-  for (let i = winStart; i < Math.min(seq.length, winStart + count); i += 1) {
-    const inCds = i >= cdsStart - 1 && i < cdsEndExclusive;
-    cells.push({
-      base: seq[i],
-      index: i,
-      codonIndex: inCds ? Math.floor((i - (cdsStart - 1)) / 3) : null,
-      changed: i >= changeFrom && i < changeTo,
-    });
-  }
-  return cells;
-}
-
-function groupCodons(cells: Cell[], protein: string, otherProtein: string): CodonGroup[] {
-  const groups: CodonGroup[] = [];
-  for (const cell of cells) {
-    const last = groups[groups.length - 1];
-    if (last && last.codonIndex === cell.codonIndex && cell.codonIndex !== null) {
-      last.span += 1;
-      continue;
-    }
-    if (last && last.codonIndex === null && cell.codonIndex === null) {
-      last.span += 1;
-      continue;
-    }
-    const aa = cell.codonIndex !== null ? (protein[cell.codonIndex] ?? null) : null;
-    groups.push({
-      codonIndex: cell.codonIndex,
-      span: 1,
-      aa,
-      changed:
-        cell.codonIndex !== null &&
-        (protein[cell.codonIndex] ?? '') !== (otherProtein[cell.codonIndex] ?? ''),
-      partial: false,
-    });
-  }
-  for (const g of groups) {
-    if (g.codonIndex !== null && g.span < 3) g.partial = true;
-  }
-  return groups;
-}
 
 export function DnaCompare({ analysis }: Props) {
   const [flank, setFlank] = useState(30);
   const [threeLetter, setThreeLetter] = useState(false);
   const tx = analysis.transcript;
 
-  const view = useMemo(() => {
-    const refLen = analysis.refBases.length;
-    const altLen = analysis.altBases.length;
-
-    // ウィンドウ開始はコドン境界に揃える（読み枠が視覚的に一致するように）
-    let winStart = Math.max(0, analysis.changeIndex - flank);
-    const cdsOffset = tx.cdsStart - 1;
-    if (winStart > cdsOffset) {
-      winStart -= (winStart - cdsOffset) % 3;
-    }
-    const count = Math.max(refLen, altLen) + (analysis.changeIndex - winStart) + flank;
-
-    const refCells = buildCells(
-      tx.sequence,
-      winStart,
-      count,
-      tx.cdsStart,
-      tx.cdsEnd,
-      analysis.changeIndex,
-      analysis.changeIndex + refLen,
-    );
-    const altCells = buildCells(
-      analysis.altSequence,
-      winStart,
-      count,
-      analysis.altCdsStart,
-      analysis.altCdsStart - 1 + analysis.altProtein.length * 3,
-      analysis.changeIndex,
-      analysis.changeIndex + altLen,
-    );
-    return {
-      winStart,
-      refCells,
-      altCells,
-      refGroups: groupCodons(refCells, analysis.refProtein, analysis.altProtein),
-      altGroups: groupCodons(altCells, analysis.altProtein, analysis.refProtein),
-    };
-  }, [analysis, flank, tx]);
-
-  // イントロン内のバリアントは転写産物配列に現れないため、参照側のみを表示する
-  const intronic = analysis.consequence === 'intronic' || analysis.consequence === 'splice_site';
-
-  const changeClass =
-    analysis.altBases.length > analysis.refBases.length
-      ? 'ins'
-      : analysis.altBases.length < analysis.refBases.length
-        ? 'del'
-        : 'sub';
+  const view = useMemo(() => buildDnaView(analysis, flank), [analysis, flank]);
 
   const renderRuler = (cells: Cell[]) => (
     <div className="seq-line ruler">
       {cells.map((c) => {
-        const label = indexToCLabel(c.index, tx);
         const show = c.index === analysis.changeIndex || (c.index + 1) % 10 === 0;
         return (
           <span key={c.index} className="cell tick">
-            {show ? <span className="tick-label">{label}</span> : ''}
+            {show ? <span className="tick-label">{indexToCLabel(c.index, tx)}</span> : ''}
           </span>
         );
       })}
     </div>
   );
 
-  const renderBases = (cells: Cell[], kind: 'ref' | 'alt') => (
-    <div className="seq-line bases">
-      {cells.map((c) => (
-        <span
-          key={c.index}
-          className={`cell base base-${c.base}${c.changed ? ` changed ${kind === 'ref' ? (changeClass === 'ins' ? 'sub' : 'del') : changeClass}` : ''}${
-            c.codonIndex === null ? ' utr' : ''
-          }`}
-        >
-          {c.base}
-        </span>
-      ))}
-    </div>
-  );
+  const renderBases = (cells: Cell[], side: 'ref' | 'alt') => {
+    // 参照側では欠失を、変異側では挿入・置換を強調する
+    const kind = side === 'ref' ? (view.changeClass === 'ins' ? 'sub' : 'del') : view.changeClass;
+    return (
+      <div className="seq-line bases">
+        {cells.map((c) => (
+          <span
+            key={c.index}
+            className={[
+              'cell',
+              'base',
+              `base-${c.base}`,
+              c.changed ? `changed ${kind}` : '',
+              c.codonIndex === null ? 'utr' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
+            {c.base}
+          </span>
+        ))}
+      </div>
+    );
+  };
 
   const renderCodons = (groups: CodonGroup[]) => (
     <div className="seq-line codons">
       {groups.map((g, i) => (
         <span
           key={`${g.codonIndex ?? 'u'}-${i}`}
-          className={`codon${g.codonIndex === null ? ' utr' : ''}${g.changed ? ' changed' : ''}${
-            g.partial ? ' partial' : ''
-          }${g.aa === '*' ? ' stop' : ''}`}
-          style={{ width: `calc(var(--cell) * ${g.span})` }}
+          className={[
+            'codon',
+            g.codonIndex === null ? 'utr' : '',
+            g.changed ? 'changed' : '',
+            g.partial ? 'partial' : '',
+            g.aa === '*' ? 'stop' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          // グリッドの列を塩基セルと共有することで、コドン枠のずれが構造的に起きない
+          style={{ gridColumn: `span ${g.span}` }}
           title={
             g.codonIndex !== null && g.aa
               ? `コドン ${g.codonIndex + 1} / ${aa3(g.aa)}`
               : '非翻訳領域 (UTR)'
           }
         >
-          {g.codonIndex === null
-            ? ''
-            : g.aa
-              ? threeLetter
-                ? aa3(g.aa)
-                : g.aa
-              : ''}
+          {g.codonIndex === null ? '' : g.aa ? (threeLetter ? aa3(g.aa) : g.aa) : ''}
           {g.codonIndex !== null && g.span === 3 && (
             <span className="codon-num">{g.codonIndex + 1}</span>
           )}
@@ -228,7 +127,7 @@ export function DnaCompare({ analysis }: Props) {
             </div>
           </div>
 
-          {!intronic && (
+          {!view.intronic && (
             <div className="seq-row alt">
               <div className="seq-label">
                 <span className="seq-name">バリアント</span>
@@ -261,10 +160,15 @@ export function DnaCompare({ analysis }: Props) {
         </li>
       </ul>
       <p className="hint">
-        {intronic
+        {view.intronic
           ? 'イントロンの塩基は転写産物 (mRNA) に含まれないため、変異側の配列は表示できません。上図は変異位置に隣接するエクソンの配列です。'
           : 'コドン枠は各配列の開始コドンを基準に描いています。塩基数が 3 の倍数でない変化では、変異側のコドン枠が参照側からずれて表示されます（フレームシフト）。'}
       </p>
+
+      <ExportButtons
+        render={() => renderDnaComparison(analysis, { flank, threeLetter })}
+        fileName={safeFileName(analysis, 'DNA')}
+      />
     </section>
   );
 }

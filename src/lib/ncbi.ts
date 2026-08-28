@@ -15,14 +15,35 @@ export type Assembly = 'GRCh38' | 'GRCh37';
 /** ヒト染色体の RefSeq アクセッション接頭辞（NC_000001〜NC_000024） */
 const ASSEMBLY_CHR_PREFIX = 'NC_0000';
 
-async function fetchText(url: string, signal?: AbortSignal): Promise<string> {
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * NCBI は API キーなしの場合 3 リクエスト/秒に制限しており、混雑時は 429 や 5xx を返す。
+ * 一時的な失敗は短い待機を挟んで数回だけ再試行する。
+ */
+async function fetchText(url: string, signal?: AbortSignal, attempt = 0): Promise<string> {
+  const MAX_ATTEMPTS = 3;
   let res: Response;
   try {
     res = await fetch(url, { signal });
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e;
+    if (attempt + 1 < MAX_ATTEMPTS) {
+      await sleep(600 * (attempt + 1));
+      return fetchText(url, signal, attempt + 1);
+    }
     throw new NcbiError(
       'NCBI への通信に失敗しました。ネットワーク接続を確認して、しばらくしてから再試行してください。',
+    );
+  }
+  if (res.status === 429 || res.status >= 500) {
+    if (attempt + 1 < MAX_ATTEMPTS) {
+      await sleep(800 * (attempt + 1));
+      return fetchText(url, signal, attempt + 1);
+    }
+    throw new NcbiError(
+      `NCBI が一時的に応答できない状態です (HTTP ${res.status})。` +
+        ' 少し時間をおいてから再試行してください。',
     );
   }
   if (!res.ok) {
@@ -31,8 +52,30 @@ async function fetchText(url: string, signal?: AbortSignal): Promise<string> {
   return res.text();
 }
 
+/**
+ * NCBI はエラー時に制御文字を含む不正な JSON を返すことがあるため、
+ * そのまま JSON.parse せず、失敗したら制御文字を除いて読み直す。
+ */
+function parseJsonLenient<T>(text: string): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    try {
+      // 文字列リテラル内の生の制御文字（改行など）を空白に置き換える。
+      // 制御文字にマッチさせるのがここでの目的なので、この規則は意図的に無効化する。
+      // eslint-disable-next-line no-control-regex
+      const cleaned = text.replace(/[\u0000-\u001F]/g, ' ');
+      return JSON.parse(cleaned) as T;
+    } catch {
+      throw new NcbiError(
+        'NCBI からの応答を解釈できませんでした。少し時間をおいてから再試行してください。',
+      );
+    }
+  }
+}
+
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  return JSON.parse(await fetchText(url, signal)) as T;
+  return parseJsonLenient<T>(await fetchText(url, signal));
 }
 
 /** 遺伝子名から MANE Select の転写産物アクセッションを検索する */
@@ -42,6 +85,12 @@ export async function findManeSelect(gene: string, signal?: AbortSignal): Promis
     `${EUTILS}/esearch.fcgi?db=nuccore&retmode=json&retmax=5&tool=${TOOL}` +
     `&term=${encodeURIComponent(term)}`;
   const data = await fetchJson<{ esearchresult?: { idlist?: string[]; ERROR?: string } }>(url, signal);
+  if (data.esearchresult?.ERROR) {
+    throw new NcbiError(
+      `NCBI の検索がエラーを返しました: ${data.esearchresult.ERROR.trim()}` +
+        ' 少し時間をおいてから再試行してください。',
+    );
+  }
   const ids = data.esearchresult?.idlist ?? [];
   if (ids.length === 0) {
     throw new NcbiError(

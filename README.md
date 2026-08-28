@@ -22,6 +22,10 @@
 
 続いて、転写産物とタンパク質の全体像、DNA 配列の比較、アミノ酸配列の比較が表示されます。
 
+### 画像として書き出す
+
+「DNA 配列の比較」「アミノ酸配列の比較」はそれぞれ **PNG 画像として保存**、または**クリップボードにコピー**できます。スライドや文書にそのまま貼り付けられるよう、画面のテーマに関わらず白背景・2 倍解像度で出力し、見出し（参照配列・遺伝子・HGVS.c・変異型・HGVS.p）と凡例を含めます。長い配列は自動的に折り返されます。
+
 ### 対応する HGVS.c 記法
 
 | 変異型 | 例 |
@@ -80,6 +84,8 @@ src/
     genbank.ts   GenBank フラットファイルのパーサ
     ncbi.ts      NCBI E-utilities / Variation Services クライアント
     variant.ts   バリアントの適用と consequence 判定
+    seqview.ts   配列比較ビューの組み立て（画面と画像出力で共通）
+    exportImage.ts  PNG 書き出し用の Canvas レンダラ
   components/
     VariantForm.tsx     入力フォーム
     SummaryHeader.tsx   バリアントと簡易説明（ページ上部）
