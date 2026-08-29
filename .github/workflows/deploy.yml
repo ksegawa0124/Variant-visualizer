@@ -32,7 +32,11 @@ jobs:
       - name: 型チェックとビルド
         run: npm run build
 
+      # enablement: true でリポジトリの Pages を自動的に有効化し、
+      # 公開元を GitHub Actions に設定する（Settings での手動操作が不要になる）
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
