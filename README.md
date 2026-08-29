@@ -98,7 +98,9 @@ src/
 
 `main` ブランチへの push で GitHub Actions が `dist/` をビルドし、GitHub Pages へ公開します（`.github/workflows/deploy.yml`）。
 
-初回のみ、リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定してください。
+**初回のみ手動設定が必要です。** リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定してください。
+
+この設定を省略すると、ワークフローが `Get Pages site failed ... Not Found` で失敗します。`actions/configure-pages` の `enablement: true` でも代替できません（`GITHUB_TOKEN` には Pages サイトを新規作成する権限がなく、`Resource not accessible by integration` になります）。
 
 `vite.config.ts` で `base: './'` を指定しているため、ユーザーページ・プロジェクトページのどちらでもそのまま動作します。
 
