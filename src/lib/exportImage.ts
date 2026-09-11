@@ -1,12 +1,14 @@
 /**
  * 比較結果を PNG 画像として書き出すための Canvas レンダラ。
  *
- * 画面の DOM をそのまま画像化するのではなく、同じビューデータ (seqview.ts) から
+ * 画面の DOM をそのまま画像化するのではなく、同じビューデータ (seqview.ts / compare.ts) から
  * 描き直している。これにより配置を完全に制御でき、長い配列を折り返して
  * 高解像度（2 倍）で出力できる。
  */
 
 import { aa3, aaClass } from './codon';
+import type { AnalysisRef, ComparisonRow } from './compare';
+import { variantColor, variantTag } from './palette';
 import { buildDnaView, buildProteinView, type CodonGroup, type Cell } from './seqview';
 import { CONSEQUENCE_INFO, indexToCLabel, type VariantAnalysis } from './variant';
 
@@ -35,6 +37,7 @@ const C = {
   aaPolar: '#dff0f6',
   aaAcidic: '#fbe0e0',
   aaBasic: '#e2e0fb',
+  zebra: '#fafbfd',
 } as const;
 
 const MONO = '"Cascadia Mono", "Consolas", "Noto Sans Mono", ui-monospace, monospace';
@@ -83,43 +86,111 @@ function roundRect(
   ctx.roundRect(x, y, w, h, r);
 }
 
-/** 見出し（バリアント名・変異型・HGVS.p） */
-function drawHeader(l: Layout, analysis: VariantAnalysis, subtitle: string): void {
-  const { ctx } = l;
-  const info = CONSEQUENCE_INFO[analysis.consequence];
+/** 指定幅に収まるよう末尾を省略する */
+function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) t = t.slice(0, -1);
+  return `${t}…`;
+}
 
+function createCanvas(height: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
+  const canvas = document.createElement('canvas');
+  canvas.width = IMG_W * SCALE;
+  canvas.height = Math.ceil(height) * SCALE;
+  const ctx = canvas.getContext('2d')!;
+  ctx.scale(SCALE, SCALE);
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, IMG_W, height);
+  ctx.textBaseline = 'alphabetic';
+  return { canvas, ctx };
+}
+
+function hr(l: Layout): void {
+  l.ctx.strokeStyle = C.border;
+  l.ctx.lineWidth = 1;
+  l.ctx.beginPath();
+  l.ctx.moveTo(PAD, l.y + 0.5);
+  l.ctx.lineTo(IMG_W - PAD, l.y + 0.5);
+  l.ctx.stroke();
+}
+
+const TITLE_H = 30 + 28 + 16;
+const VARIANT_LINE_H = 17;
+
+/** 見出し（対象と図の種類） */
+function drawTitle(l: Layout, title: string, subtitle: string): void {
+  const { ctx } = l;
+  ctx.textAlign = 'left';
   ctx.fillStyle = C.text;
   ctx.font = `600 20px ${MONO}`;
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillText(analysis.hgvsC, PAD, l.y + 20);
+  ctx.fillText(fitText(ctx, title, IMG_W - PAD * 2), PAD, l.y + 20);
   l.y += 30;
 
   ctx.font = `13px ${SANS}`;
   ctx.fillStyle = C.muted;
-  const line = `${subtitle}　|　${info.label}　|　${analysis.hgvsP}`;
-  ctx.fillText(line, PAD, l.y + 13);
+  ctx.fillText(fitText(ctx, subtitle, IMG_W - PAD * 2), PAD, l.y + 13);
   l.y += 28;
 
-  ctx.strokeStyle = C.border;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(PAD, l.y + 0.5);
-  ctx.lineTo(IMG_W - PAD, l.y + 0.5);
-  ctx.stroke();
+  hr(l);
   l.y += 16;
+}
+
+/** 複数バリアントの凡例行（色チップ + HGVS.c + 変異型 + HGVS.p） */
+function drawVariantLines(l: Layout, items: AnalysisRef[]): void {
+  if (items.length < 2) return;
+  const { ctx } = l;
+  l.y -= 10;
+  items.forEach((item, i) => {
+    const a = item.analysis;
+    const y = l.y + i * VARIANT_LINE_H;
+    ctx.fillStyle = variantColor(item.order);
+    roundRect(ctx, PAD, y + 2, 9, 9, 2);
+    ctx.fill();
+
+    ctx.textAlign = 'left';
+    ctx.font = `700 11px ${SANS}`;
+    ctx.fillStyle = C.text;
+    ctx.fillText(variantTag(item.order), PAD + 15, y + 11);
+
+    ctx.font = `11.5px ${MONO}`;
+    ctx.fillText(a.parsed.normalized, PAD + 42, y + 11);
+
+    ctx.font = `11px ${SANS}`;
+    ctx.fillStyle = C.muted;
+    const tail = `${CONSEQUENCE_INFO[a.consequence].label}　${a.hgvsP}`;
+    ctx.fillText(fitText(ctx, tail, IMG_W - PAD * 2 - 230), PAD + 230, y + 11);
+  });
+  l.y += items.length * VARIANT_LINE_H + 8;
+}
+
+/** 見出し全体（seq 系の図で共通） */
+function drawHeader(l: Layout, items: AnalysisRef[], subtitle: string): void {
+  const first = items[0].analysis;
+  const tx = first.transcript;
+  const title =
+    items.length === 1
+      ? first.hgvsC
+      : `${tx.accession}(${tx.gene}) — ${items.length} バリアントの比較`;
+  const sub =
+    items.length === 1
+      ? `${subtitle}　|　${CONSEQUENCE_INFO[first.consequence].label}　|　${first.hgvsP}`
+      : subtitle;
+  drawTitle(l, title, sub);
+  drawVariantLines(l, items);
+}
+
+function headerHeight(items: AnalysisRef[]): number {
+  return TITLE_H + (items.length >= 2 ? items.length * VARIANT_LINE_H - 2 : 0);
 }
 
 function drawFooter(l: Layout): void {
   const { ctx } = l;
   l.y += 4;
-  ctx.strokeStyle = C.border;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(PAD, l.y + 0.5);
-  ctx.lineTo(IMG_W - PAD, l.y + 0.5);
-  ctx.stroke();
+  hr(l);
   l.y += 16;
 
+  ctx.textAlign = 'left';
   ctx.font = `11px ${SANS}`;
   ctx.fillStyle = C.muted;
   ctx.fillText(
@@ -130,10 +201,13 @@ function drawFooter(l: Layout): void {
   l.y += 20;
 }
 
+const FOOTER_H = 40;
+
 /** 凡例 */
 function drawLegend(l: Layout, items: Array<{ label: string; fill: string; stroke?: string }>): void {
   const { ctx } = l;
   ctx.font = `11px ${SANS}`;
+  ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   let x = PAD;
   const y = l.y + 8;
@@ -152,6 +226,8 @@ function drawLegend(l: Layout, items: Array<{ label: string; fill: string; strok
   ctx.textBaseline = 'alphabetic';
   l.y += 22;
 }
+
+const LEGEND_H = 22;
 
 interface DnaMetrics {
   cellW: number;
@@ -177,11 +253,9 @@ function drawBaseRow(
   cells: Cell[],
   x0: number,
   y: number,
-  changeClass: 'sub' | 'del' | 'ins',
-  side: 'ref' | 'alt',
+  kind: 'sub' | 'del' | 'ins',
 ): void {
   const { cellW, baseH } = DNA_M;
-  const kind = side === 'ref' ? (changeClass === 'ins' ? 'sub' : 'del') : changeClass;
   const bg = kind === 'sub' ? C.subBg : kind === 'del' ? C.delBg : C.insBg;
   const line = kind === 'sub' ? C.subLine : kind === 'del' ? C.delLine : C.insLine;
 
@@ -257,16 +331,17 @@ function drawRuler(
   cells: Cell[],
   x0: number,
   y: number,
-  analysis: VariantAnalysis,
+  tx: VariantAnalysis['transcript'],
+  markers: number[],
 ): void {
   const { cellW, rulerH } = DNA_M;
   ctx.font = `9px ${MONO}`;
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'center';
   cells.forEach((cell, i) => {
-    const show = cell.index === analysis.changeIndex || (cell.index + 1) % 10 === 0;
+    const show = markers.includes(cell.index) || (cell.index + 1) % 10 === 0;
     if (show) {
-      ctx.fillText(indexToCLabel(cell.index, analysis.transcript), x0 + i * cellW + cellW / 2, y + rulerH - 2);
+      ctx.fillText(indexToCLabel(cell.index, tx), x0 + i * cellW + cellW / 2, y + rulerH - 2);
     }
   });
   ctx.textAlign = 'left';
@@ -278,18 +353,22 @@ function drawRowLabel(
   sub: string,
   y: number,
   h: number,
+  color?: string,
 ): void {
   ctx.textAlign = 'left';
+  let x = PAD;
+  if (color) {
+    ctx.fillStyle = color;
+    roundRect(ctx, x, y + h / 2 - 10, 4, 14, 2);
+    ctx.fill();
+    x += 9;
+  }
   ctx.fillStyle = C.text;
   ctx.font = `700 12px ${SANS}`;
-  ctx.fillText(name, PAD, y + h / 2 - 1);
+  ctx.fillText(fitText(ctx, name, LABEL_W - 12 - (x - PAD)), x, y + h / 2 - 1);
   ctx.fillStyle = C.muted;
   ctx.font = `9.5px ${MONO}`;
-  const maxW = LABEL_W - 12;
-  let text = sub;
-  while (text.length > 4 && ctx.measureText(text).width > maxW) text = text.slice(0, -1);
-  if (text !== sub) text = `${text.slice(0, -1)}…`;
-  ctx.fillText(text, PAD, y + h / 2 + 12);
+  ctx.fillText(fitText(ctx, sub, LABEL_W - 12 - (x - PAD)), x, y + h / 2 + 12);
 }
 
 export interface DnaExportOptions {
@@ -297,45 +376,36 @@ export interface DnaExportOptions {
   threeLetter: boolean;
 }
 
-/** DNA 配列の比較を PNG 用の Canvas に描画する */
+/** DNA 配列の比較を PNG 用の Canvas に描画する（バリアントは何本でも重ねられる） */
 export function renderDnaComparison(
-  analysis: VariantAnalysis,
+  items: AnalysisRef[],
   options: DnaExportOptions,
 ): HTMLCanvasElement {
-  const view = buildDnaView(analysis, options.flank);
+  const analyses = items.map((i) => i.analysis);
+  const byAnalysis = new Map(items.map((i) => [i.analysis, i]));
+  const multi = items.length > 1;
+  const tx = analyses[0].transcript;
+  const view = buildDnaView(analyses, options.flank);
   const { cellW, rulerH, baseH, codonH, rowGap, blockGap } = DNA_M;
 
   const x0 = PAD + LABEL_W;
-  const perLine = Math.floor((IMG_W - x0 - PAD) / cellW);
+  const maxPerLine = Math.floor((IMG_W - x0 - PAD) / cellW);
   const total = view.refCells.length;
-  const lines = Math.max(1, Math.ceil(total / perLine));
+  const lines = Math.max(1, Math.ceil(total / maxPerLine));
+  // 端数が 1 行に数セルだけ残らないよう、行数を決めてから均等に割り付ける
+  const perLine = Math.ceil(total / lines);
 
-  const blockH = view.intronic
-    ? rulerH + baseH + codonH + rowGap
-    : rulerH + (baseH + codonH) * 2 + rowGap * 3;
+  const nRows = 1 + view.rows.length;
+  const blockH = rulerH + nRows * (baseH + codonH + rowGap) + blockGap - rowGap;
+  const height = PAD + headerHeight(items) + lines * blockH + LEGEND_H + FOOTER_H + PAD;
 
-  const headerH = 90;
-  const legendH = 26;
-  const footerH = 40;
-  const height = headerH + lines * (blockH + blockGap) + legendH + footerH;
-
-  const canvas = document.createElement('canvas');
-  canvas.width = IMG_W * SCALE;
-  canvas.height = Math.ceil(height) * SCALE;
-  const ctx = canvas.getContext('2d')!;
-  ctx.scale(SCALE, SCALE);
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(0, 0, IMG_W, height);
-  ctx.textBaseline = 'alphabetic';
-
+  const { canvas, ctx } = createCanvas(height);
   const l: Layout = { ctx, y: PAD };
-  drawHeader(l, analysis, 'DNA 配列の比較');
+  drawHeader(l, items, 'DNA 配列の比較');
 
   for (let line = 0; line < lines; line += 1) {
     const from = line * perLine;
     const to = Math.min(total, from + perLine);
-    const refSlice = view.refCells.slice(from, to);
-    const altSlice = view.altCells.slice(from, to);
 
     // コドン枠はセル数を数えながら切り出す（枠が行をまたぐ場合は分割する）
     const sliceGroups = (groups: CodonGroup[]): CodonGroup[] => {
@@ -353,16 +423,16 @@ export function renderDnaComparison(
     };
 
     let y = l.y;
-    drawRuler(ctx, refSlice, x0, y, analysis);
+    drawRuler(ctx, view.refCells.slice(from, to), x0, y, tx, view.markers);
     y += rulerH;
 
-    drawRowLabel(ctx, '参照配列', analysis.transcript.accession, y, baseH + codonH);
-    drawBaseRow(ctx, refSlice, x0, y, view.changeClass, 'ref');
+    drawRowLabel(ctx, '参照配列', tx.accession, y, baseH + codonH);
+    drawBaseRow(ctx, view.refCells.slice(from, to), x0, y, view.refChangeClass);
     y += baseH;
     drawCodonRow(ctx, sliceGroups(view.refGroups), x0, y, options.threeLetter);
     y += codonH + rowGap;
 
-    if (!view.intronic) {
+    for (const row of view.rows) {
       ctx.strokeStyle = C.border;
       ctx.setLineDash([3, 3]);
       ctx.lineWidth = 1;
@@ -372,10 +442,18 @@ export function renderDnaComparison(
       ctx.stroke();
       ctx.setLineDash([]);
 
-      drawRowLabel(ctx, 'バリアント', analysis.parsed.normalized, y, baseH + codonH);
-      drawBaseRow(ctx, altSlice, x0, y, view.changeClass, 'alt');
+      const order = byAnalysis.get(row.analysis)?.order ?? 0;
+      drawRowLabel(
+        ctx,
+        multi ? variantTag(order) : 'バリアント',
+        row.analysis.parsed.normalized,
+        y,
+        baseH + codonH,
+        multi ? variantColor(order) : undefined,
+      );
+      drawBaseRow(ctx, row.cells.slice(from, to), x0, y, row.changeClass);
       y += baseH;
-      drawCodonRow(ctx, sliceGroups(view.altGroups), x0, y, options.threeLetter);
+      drawCodonRow(ctx, sliceGroups(row.groups), x0, y, options.threeLetter);
       y += codonH + rowGap;
     }
 
@@ -395,38 +473,32 @@ export function renderDnaComparison(
 
 const PROT_M = { cellW: 34, cellH: 26, rulerH: 14, rowGap: 6, blockGap: 22 };
 
-/** アミノ酸配列の比較を PNG 用の Canvas に描画する */
+/** アミノ酸配列の比較を PNG 用の Canvas に描画する（バリアントは何本でも重ねられる） */
 export function renderProteinComparison(
-  analysis: VariantAnalysis,
+  items: AnalysisRef[],
   options: { threeLetter: boolean },
 ): HTMLCanvasElement {
-  const { positions } = buildProteinView(analysis);
+  const multi = items.length > 1;
+  const shown = items.filter((i) => i.analysis.proteinComputed);
+  const targets = (shown.length > 0 ? shown : items).map((i) => i.analysis);
+  const { positions, markers } = buildProteinView(targets);
   const { cellW, cellH, rulerH, rowGap, blockGap } = PROT_M;
 
   const x0 = PAD + LABEL_W;
-  const perLine = Math.floor((IMG_W - x0 - PAD) / cellW);
-  const lines = Math.max(1, Math.ceil(positions.length / perLine));
-  const blockH = rulerH + cellH * 2 + rowGap;
+  const maxPerLine = Math.floor((IMG_W - x0 - PAD) / cellW);
+  const lines = Math.max(1, Math.ceil(positions.length / maxPerLine));
+  const perLine = Math.ceil(positions.length / lines);
+  const nRows = 1 + shown.length;
+  const blockH = rulerH + nRows * (cellH + rowGap) - rowGap + blockGap;
+  const height = PAD + headerHeight(items) + lines * blockH + LEGEND_H + FOOTER_H + PAD;
 
-  const headerH = 90;
-  const height = headerH + lines * (blockH + blockGap) + 26 + 40;
-
-  const canvas = document.createElement('canvas');
-  canvas.width = IMG_W * SCALE;
-  canvas.height = Math.ceil(height) * SCALE;
-  const ctx = canvas.getContext('2d')!;
-  ctx.scale(SCALE, SCALE);
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(0, 0, IMG_W, height);
-  ctx.textBaseline = 'alphabetic';
-
+  const { canvas, ctx } = createCanvas(height);
   const l: Layout = { ctx, y: PAD };
-  drawHeader(l, analysis, 'アミノ酸配列の比較');
+  drawHeader(l, items, 'アミノ酸配列の比較');
 
-  const refP = analysis.refProtein;
-  const altP = analysis.altProtein;
+  const refP = items[0].analysis.refProtein;
 
-  const drawResidues = (slice: number[], seq: string, y: number) => {
+  const drawResidues = (slice: number[], seq: string, other: string, y: number) => {
     slice.forEach((pos, i) => {
       const x = x0 + i * cellW;
       const aa = seq[pos];
@@ -442,7 +514,7 @@ export function renderProteinComparison(
         }
         return;
       }
-      const changed = refP[pos] !== altP[pos];
+      const changed = seq[pos] !== other[pos];
       ctx.fillStyle = aaFill(aa);
       roundRect(ctx, x, y, cellW - 3, cellH - 3, 3);
       ctx.fill();
@@ -469,22 +541,31 @@ export function renderProteinComparison(
     ctx.fillStyle = C.muted;
     ctx.textAlign = 'center';
     slice.forEach((pos, i) => {
-      if ((pos + 1) % 5 === 0 || pos + 1 === analysis.proteinChangeStart) {
+      if ((pos + 1) % 5 === 0 || markers.includes(pos + 1)) {
         ctx.fillText(String(pos + 1), x0 + i * cellW + (cellW - 3) / 2, y + rulerH - 3);
       }
     });
     ctx.textAlign = 'left';
     y += rulerH;
 
-    drawRowLabel(ctx, '参照', analysis.transcript.proteinId ?? '', y, cellH);
-    drawResidues(slice, refP, y);
+    drawRowLabel(ctx, '参照', items[0].analysis.transcript.proteinId ?? '', y, cellH);
+    drawResidues(slice, refP, refP, y);
     y += cellH + rowGap;
 
-    drawRowLabel(ctx, 'バリアント', analysis.hgvsP, y, cellH);
-    drawResidues(slice, altP, y);
-    y += cellH;
+    for (const item of shown) {
+      drawRowLabel(
+        ctx,
+        multi ? variantTag(item.order) : 'バリアント',
+        item.analysis.hgvsP,
+        y,
+        cellH,
+        multi ? variantColor(item.order) : undefined,
+      );
+      drawResidues(slice, item.analysis.altProtein, refP, y);
+      y += cellH + rowGap;
+    }
 
-    l.y = y + blockGap;
+    l.y = y - rowGap + blockGap;
   }
 
   drawLegend(l, [
@@ -499,9 +580,142 @@ export function renderProteinComparison(
   return canvas;
 }
 
+/* ---------- 比較表 ---------- */
+
+interface Column {
+  key: keyof ComparisonRow | 'tag';
+  label: string;
+  w: number;
+  mono?: boolean;
+}
+
+const TABLE_COLS: Column[] = [
+  { key: 'tag', label: '', w: 40 },
+  { key: 'gene', label: '遺伝子', w: 80 },
+  { key: 'accession', label: '参照配列', w: 112, mono: true },
+  { key: 'hgvsC', label: 'HGVS.c', w: 150, mono: true },
+  { key: 'consequence', label: '変異型', w: 152 },
+  { key: 'hgvsP', label: 'HGVS.p', w: 158, mono: true },
+  { key: 'location', label: '位置', w: 152 },
+  { key: 'protein', label: 'タンパク質長', w: 142 },
+  { key: 'genomic', label: 'ゲノム座標', w: 238, mono: true },
+];
+
+/**
+ * 全行で同じ値になる列（遺伝子・参照配列）は表から外し、副題にまとめる。
+ * 同じ遺伝子のバリアントを並べることが多く、その分を他の列の幅に回せる。
+ */
+function layoutColumns(rows: ComparisonRow[]): { cols: Column[]; shared: string[] } {
+  const same = (key: 'gene' | 'accession') =>
+    rows.length > 0 && rows.every((r) => r[key] === rows[0][key]);
+  const shared: string[] = [];
+  const drop = new Set<string>();
+  for (const key of ['gene', 'accession'] as const) {
+    if (same(key)) {
+      shared.push(rows[0][key]);
+      drop.add(key);
+    }
+  }
+  const kept = TABLE_COLS.filter((c) => !drop.has(c.key));
+  const total = kept.reduce((s, c) => s + c.w, 0);
+  const scale = (IMG_W - PAD * 2) / total;
+  return { cols: kept.map((c) => ({ ...c, w: c.w * scale })), shared };
+}
+
+const TABLE_HEAD_H = 28;
+const TABLE_ROW_H = 32;
+
+/** 複数バリアントの比較表を PNG 用の Canvas に描画する */
+export function renderVariantTable(rows: ComparisonRow[], subtitle: string): HTMLCanvasElement {
+  const height =
+    PAD + TITLE_H + TABLE_HEAD_H + rows.length * TABLE_ROW_H + 14 + FOOTER_H + PAD;
+
+  const { cols, shared } = layoutColumns(rows);
+  const { canvas, ctx } = createCanvas(height);
+  const l: Layout = { ctx, y: PAD };
+  drawTitle(
+    l,
+    `バリアント比較（${rows.length} 件）`,
+    [...shared, subtitle].join('　|　'),
+  );
+
+  const totalW = cols.reduce((s, c) => s + c.w, 0);
+  const startX = PAD;
+
+  // ヘッダ行
+  ctx.fillStyle = C.panel;
+  roundRect(ctx, startX, l.y, totalW, TABLE_HEAD_H, 4);
+  ctx.fill();
+  ctx.font = `700 11px ${SANS}`;
+  ctx.fillStyle = C.muted;
+  ctx.textAlign = 'left';
+  let x = startX;
+  for (const col of cols) {
+    if (col.label) ctx.fillText(col.label, x + 8, l.y + 18);
+    x += col.w;
+  }
+  l.y += TABLE_HEAD_H;
+
+  rows.forEach((row, i) => {
+    const y = l.y + i * TABLE_ROW_H;
+    if (i % 2 === 1) {
+      ctx.fillStyle = C.zebra;
+      ctx.fillRect(startX, y, totalW, TABLE_ROW_H);
+    }
+    ctx.strokeStyle = C.border;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(startX, y + 0.5);
+    ctx.lineTo(startX + totalW, y + 0.5);
+    ctx.stroke();
+
+    let cx = startX;
+    for (const col of cols) {
+      const textY = y + TABLE_ROW_H / 2 + 4;
+      if (col.key === 'tag') {
+        ctx.fillStyle = row.color;
+        roundRect(ctx, cx + 8, y + 9, 22, 14, 3);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `700 10px ${SANS}`;
+        ctx.textAlign = 'center';
+        ctx.fillText(row.tag, cx + 19, y + 20);
+        ctx.textAlign = 'left';
+      } else if (col.key === 'consequence' && row.error) {
+        ctx.fillStyle = C.delLine;
+        ctx.font = `11px ${SANS}`;
+        const w = totalW - (cx - startX) - 16;
+        ctx.fillText(fitText(ctx, `解析できません: ${row.error}`, w), cx + 8, textY);
+        break;
+      } else {
+        const value = String(row[col.key as keyof ComparisonRow] ?? '');
+        ctx.fillStyle =
+          col.key === 'consequence' && row.severity === 'high' ? C.delLine : C.text;
+        ctx.font = col.mono ? `11px ${MONO}` : `11.5px ${SANS}`;
+        ctx.fillText(fitText(ctx, value, col.w - 14), cx + 8, textY);
+      }
+      cx += col.w;
+    }
+  });
+
+  l.y += rows.length * TABLE_ROW_H;
+  ctx.strokeStyle = C.border;
+  ctx.beginPath();
+  ctx.moveTo(startX, l.y + 0.5);
+  ctx.lineTo(startX + totalW, l.y + 0.5);
+  ctx.stroke();
+  l.y += 14;
+
+  drawFooter(l);
+  return canvas;
+}
+
 /** ファイル名に使えない文字を置き換える */
-export function safeFileName(analysis: VariantAnalysis, suffix: string): string {
-  const base = `${analysis.transcript.gene}_${analysis.transcript.accession}_${analysis.parsed.normalized}`;
+export function safeFileName(items: AnalysisRef[], suffix: string): string {
+  const tx = items[0].analysis.transcript;
+  const label =
+    items.length === 1 ? items[0].analysis.parsed.normalized : `${items.length}variants`;
+  const base = `${tx.gene}_${tx.accession}_${label}`;
   return `${base.replace(/[^A-Za-z0-9_.+-]/g, '_')}_${suffix}.png`;
 }
 

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { CONSEQUENCE_INFO, type VariantAnalysis } from '../lib/variant';
+import { variantColor, variantTag } from '../lib/palette';
 import type { Assembly, GenomicMapping } from '../lib/ncbi';
 
 interface Props {
@@ -8,6 +9,8 @@ interface Props {
   genomic: GenomicMapping | null;
   genomicPending: boolean;
   warnings: string[];
+  /** 複数バリアントを比較しているときの入力順（単独なら null） */
+  tag: number | null;
 }
 
 const ASSEMBLY_LABEL: Record<Assembly, string> = {
@@ -37,7 +40,14 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-export function SummaryHeader({ analysis, assembly, genomic, genomicPending, warnings }: Props) {
+export function SummaryHeader({
+  analysis,
+  assembly,
+  genomic,
+  genomicPending,
+  warnings,
+  tag,
+}: Props) {
   const tx = analysis.transcript;
   const info = CONSEQUENCE_INFO[analysis.consequence];
 
@@ -46,6 +56,11 @@ export function SummaryHeader({ analysis, assembly, genomic, genomicPending, war
       {/* 1. バリアント（参照配列・遺伝子・HGVS.c） */}
       <div className="summary-variant">
         <h2>
+          {tag !== null && (
+            <span className="entry-tag" style={{ background: variantColor(tag) }}>
+              {variantTag(tag)}
+            </span>
+          )}
           <span className="accession">{tx.accession}</span>
           <span className="paren">(</span>
           <span className="gene">{tx.gene}</span>

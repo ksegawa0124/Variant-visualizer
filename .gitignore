@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ローカル専用の起動設定（マシン固有の絶対パスを含む）
+.claude/
