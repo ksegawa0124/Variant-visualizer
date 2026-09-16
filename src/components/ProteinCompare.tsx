@@ -5,19 +5,13 @@ import { variantColor, variantTag } from '../lib/palette';
 import { buildProteinView, proteinViewFits } from '../lib/seqview';
 import { renderProteinComparison, safeFileName } from '../lib/exportImage';
 import { ExportButtons } from './ExportButtons';
-import { CONSEQUENCE_INFO, type VariantAnalysis } from '../lib/variant';
+import { CONSEQUENCE_INFO } from '../lib/variant';
 
 interface Props {
   refs: AnalysisRef[];
   activeId: string | null;
   /** 参照配列が全バリアントで共通のときだけ重ねられる */
   canOverlay: boolean;
-}
-
-function fasta(header: string, seq: string): string {
-  const lines: string[] = [`>${header}`];
-  for (let i = 0; i < seq.length; i += 60) lines.push(seq.slice(i, i + 60));
-  return lines.join('\n');
 }
 
 function ResidueCell({
@@ -52,7 +46,6 @@ function ResidueCell({
 export function ProteinCompare({ refs, activeId, canOverlay }: Props) {
   const [threeLetter, setThreeLetter] = useState(false);
   const [overlay, setOverlay] = useState(true);
-  const [copied, setCopied] = useState<string | null>(null);
 
   const multi = refs.length > 1;
   // 変化位置が離れすぎている場合は、重ねても読めないので自動的に 1 件表示へ戻す
@@ -76,16 +69,6 @@ export function ProteinCompare({ refs, activeId, canOverlay }: Props) {
     () => buildProteinView((changed.length > 0 ? changed : computable).map((r) => r.analysis)),
     [changed, computable],
   );
-
-  const copy = async (key: string, text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(key);
-      setTimeout(() => setCopied(null), 1500);
-    } catch {
-      setCopied(null);
-    }
-  };
 
   const uncomputable = shown.filter((r) => !r.analysis.proteinComputed);
 
@@ -116,8 +99,6 @@ export function ProteinCompare({ refs, activeId, canOverlay }: Props) {
 
   const refP = computable[0].analysis.refProtein;
   const showTags = computable.length > 1;
-  const single: VariantAnalysis | null =
-    computable.length === 1 ? computable[0].analysis : null;
 
   return (
     <section className="panel">
@@ -252,41 +233,6 @@ export function ProteinCompare({ refs, activeId, canOverlay }: Props) {
         render={() => renderProteinComparison(shown, { threeLetter })}
         fileName={safeFileName(shown, 'protein')}
       />
-
-      {single && (
-        <div className="downloads">
-          <button
-            type="button"
-            className="ghost"
-            onClick={() =>
-              copy(
-                'protein',
-                fasta(
-                  `${single.transcript.accession}(${single.transcript.gene}):${single.parsed.normalized} ${single.hgvsP}`,
-                  single.altProtein.replace(/\*$/, ''),
-                ),
-              )
-            }
-          >
-            {copied === 'protein' ? 'コピーしました' : '変異アミノ酸配列を FASTA でコピー'}
-          </button>
-          <button
-            type="button"
-            className="ghost"
-            onClick={() =>
-              copy(
-                'cds',
-                fasta(
-                  `${single.transcript.accession}(${single.transcript.gene}):${single.parsed.normalized} CDS`,
-                  single.altCds,
-                ),
-              )
-            }
-          >
-            {copied === 'cds' ? 'コピーしました' : '変異 CDS を FASTA でコピー'}
-          </button>
-        </div>
-      )}
     </section>
   );
 }

@@ -1168,6 +1168,100 @@ p.hint.panel {
   align-self: flex-start;
 }
 
+/* ---------- 行を選べることの案内 ---------- */
+
+.select-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0 0 0.9rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--accent-weak);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-size: 0.83rem;
+  line-height: 1.6;
+}
+
+.select-hint strong {
+  font-weight: 700;
+}
+
+.select-hint .mono {
+  font-family: var(--mono);
+}
+
+/* 表へ視線を導くための丸い矢印 */
+.select-hint-icon {
+  flex: none;
+  width: 1.35rem;
+  height: 1.35rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.showing {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.64rem;
+  white-space: nowrap;
+}
+
+.compare-table tbody td:first-child {
+  white-space: nowrap;
+}
+
+/* 選択中の行は左端にも印を付ける（背景色だけより気づきやすい） */
+.compare-table tbody tr.active td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ---------- FASTA 書き出し ---------- */
+
+.fasta-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.fasta-preview {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  max-height: 14rem;
+  overflow: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.hint code {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 @media (max-width: 760px) {
   .entry-head {
     display: none;

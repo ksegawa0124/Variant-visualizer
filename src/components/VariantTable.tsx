@@ -23,6 +23,7 @@ const HEADINGS = [
 ];
 
 export function VariantTable({ rows, subtitle, activeId, onSelect }: Props) {
+  const active = rows.find((r) => r.id === activeId) ?? null;
   const [copied, setCopied] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,8 +61,26 @@ export function VariantTable({ rows, subtitle, activeId, onSelect }: Props) {
     <section className="panel">
       <div className="panel-head">
         <h3>バリアント比較</h3>
-        <span className="field-hint">行を選ぶと下の詳細が切り替わります</span>
       </div>
+
+      <p className="select-hint">
+        <span className="select-hint-icon" aria-hidden="true">
+          ↓
+        </span>
+        <span>
+          <strong>表の行をクリック</strong>
+          すると、下の全体像・DNA 配列・アミノ酸配列がそのバリアントに切り替わります。
+          {active ? (
+            <>
+              {' '}
+              現在は <span className="entry-tag small" style={{ background: active.color }}>
+                {active.tag}
+              </span>{' '}
+              <span className="mono">{active.hgvsC}</span> を表示しています。
+            </>
+          ) : null}
+        </span>
+      </p>
 
       <div className="table-scroll">
         <table className="compare-table">
@@ -92,6 +111,7 @@ export function VariantTable({ rows, subtitle, activeId, onSelect }: Props) {
                   <span className="entry-tag" style={{ background: row.color }}>
                     {row.tag}
                   </span>
+                  {row.id === activeId && <span className="showing">表示中</span>}
                 </td>
                 <td>{row.gene}</td>
                 <td className="mono">{row.accession}</td>

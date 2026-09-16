@@ -7,6 +7,7 @@
  */
 
 import { aa3, aaClass } from './codon';
+import { downloadBlob } from './download';
 import type { AnalysisRef, ComparisonRow } from './compare';
 import { variantColor, variantTag } from './palette';
 import { buildDnaView, buildProteinView, type CodonGroup, type Cell } from './seqview';
@@ -730,16 +731,7 @@ function toBlob(canvas: HTMLCanvasElement): Promise<Blob> {
 
 /** PNG としてダウンロードする */
 export async function downloadCanvas(canvas: HTMLCanvasElement, fileName: string): Promise<void> {
-  const blob = await toBlob(canvas);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Safari などで click 直後に revoke すると保存が中断されるため少し待つ
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  downloadBlob(await toBlob(canvas), fileName);
 }
 
 /** PNG をクリップボードにコピーする（スライドや文書へそのまま貼り付けられる） */

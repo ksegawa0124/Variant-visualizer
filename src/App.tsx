@@ -6,6 +6,7 @@ import { VariantTable } from './components/VariantTable';
 import { OverviewMap } from './components/OverviewMap';
 import { DnaCompare } from './components/DnaCompare';
 import { ProteinCompare } from './components/ProteinCompare';
+import { FastaExport } from './components/FastaExport';
 import { HgvsError, parseHgvsC } from './lib/hgvs';
 import { GenBankError, type TranscriptRecord } from './lib/genbank';
 import {
@@ -288,6 +289,7 @@ export default function App() {
             {mapRefs.length > 0 && <OverviewMap refs={mapRefs} activeId={activeId} />}
             <DnaCompare refs={refs} activeId={activeId} canOverlay={canOverlay} />
             <ProteinCompare refs={refs} activeId={activeId} canOverlay={canOverlay} />
+            <FastaExport refs={refs} />
           </>
         )}
 
