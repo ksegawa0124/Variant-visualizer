@@ -3,7 +3,7 @@ import { copyCanvasToClipboard, downloadCanvas } from '../lib/exportImage';
 
 interface Props {
   /** 押されたときに描画を実行する（重い処理を必要になるまで遅延させる） */
-  render: () => HTMLCanvasElement;
+  render: () => HTMLCanvasElement | Promise<HTMLCanvasElement>;
   fileName: string;
 }
 
@@ -15,7 +15,7 @@ export function ExportButtons({ render, fileName }: Props) {
 
   const act = async (kind: 'download' | 'copy') => {
     try {
-      const canvas = render();
+      const canvas = await render();
       if (kind === 'download') {
         await downloadCanvas(canvas, fileName);
         setState('saved');

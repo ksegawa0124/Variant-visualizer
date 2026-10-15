@@ -1262,6 +1262,52 @@ p.hint.panel {
   cursor: not-allowed;
 }
 
+/* ---------- 染色体上の位置 ---------- */
+
+.chrom-summary {
+  margin: 0 0 0.9rem;
+  font-size: 0.88rem;
+  line-height: 1.7;
+}
+
+.chrom-summary .mono {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.chrom-map {
+  overflow-x: auto;
+}
+
+/* 図は固定幅 960 の座標系。狭い画面では横スクロールにして文字を潰さない */
+.chrom-map svg {
+  display: block;
+  width: 100%;
+  min-width: 40rem;
+  height: auto;
+}
+
+.map-legend-cds,
+.map-legend-utr {
+  background: var(--text);
+  border-color: transparent;
+}
+
+.map-legend-utr {
+  height: 0.45rem;
+  align-self: center;
+}
+
+.map-legend-intron {
+  font-family: var(--mono);
+  color: var(--text);
+  letter-spacing: -0.1em;
+}
+
+.map-legend-var {
+  color: var(--accent);
+}
+
 @media (max-width: 760px) {
   .entry-head {
     display: none;

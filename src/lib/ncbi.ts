@@ -134,6 +134,12 @@ export interface GenomicMapping {
   chromosome?: string;
   /** 1-based のゲノム開始位置 */
   position: number;
+  /**
+   * 変異が占めるゲノム上の区間（1-based・両端を含む）。図示に使う。
+   * 挿入は挿入部位を挟む 2 塩基（g.A_B ins…）の区間になる。
+   */
+  start: number;
+  end: number;
   deleted: string;
   inserted: string;
   /** g. 記法の要約 */
@@ -247,11 +253,16 @@ export async function fetchGenomicMapping(
   const picked = pickForAssembly(spdis, assembly);
   if (!picked) return null;
   const chromosome = chromosomeFromRefSeq(picked.seq_id);
+  const trimmed = trimSpdi(picked);
+  const start = trimmed.position + 1;
+  const insertion = trimmed.deleted.length === 0;
   return {
     assembly,
     sequenceId: picked.seq_id,
     chromosome,
     position: picked.position + 1,
+    start: insertion ? start - 1 : start,
+    end: insertion ? start : start + trimmed.deleted.length - 1,
     deleted: picked.deleted_sequence,
     inserted: picked.inserted_sequence,
     hgvsG: toHgvsG(picked, chromosome),

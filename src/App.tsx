@@ -4,6 +4,7 @@ import { newEntry, type FormValues, type VariantEntry } from './lib/entries';
 import { SummaryHeader } from './components/SummaryHeader';
 import { VariantTable } from './components/VariantTable';
 import { OverviewMap } from './components/OverviewMap';
+import { ChromosomeMap } from './components/ChromosomeMap';
 import { DnaCompare } from './components/DnaCompare';
 import { ProteinCompare } from './components/ProteinCompare';
 import { FastaExport } from './components/FastaExport';
@@ -287,6 +288,14 @@ export default function App() {
         {refs.length > 0 && (
           <>
             {mapRefs.length > 0 && <OverviewMap refs={mapRefs} activeId={activeId} />}
+            <ChromosomeMap
+              entries={results!.entries}
+              assembly={results!.assembly}
+              assemblyLabel={ASSEMBLY_LABEL[results!.assembly]}
+              activeId={activeId}
+              showTags={refs.length > 1}
+              onSelect={setActiveId}
+            />
             <DnaCompare refs={refs} activeId={activeId} canOverlay={canOverlay} />
             <ProteinCompare refs={refs} activeId={activeId} canOverlay={canOverlay} />
             <FastaExport refs={refs} />
@@ -303,8 +312,8 @@ export default function App() {
 
       <footer className="app-footer">
         <p>
-          配列データは NCBI E-utilities（RefSeq）および NCBI Variation Services
-          からブラウザが直接取得しています。
+          配列データは NCBI E-utilities（RefSeq）および NCBI Variation Services、
+          染色体の図のデータは UCSC Genome Browser から、ブラウザが直接取得しています。
         </p>
         <p className="disclaimer">
           本ツールは配列比較を目的とした研究・教育用であり、臨床診断には使用できません。
