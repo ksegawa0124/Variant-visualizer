@@ -8,6 +8,8 @@ import { ChromosomeMap } from './components/ChromosomeMap';
 import { DnaCompare } from './components/DnaCompare';
 import { ProteinCompare } from './components/ProteinCompare';
 import { FastaExport } from './components/FastaExport';
+import { CnvForm } from './components/CnvForm';
+import { CnvDetails, CnvSummary } from './components/CnvView';
 import { HgvsError, parseHgvsC } from './lib/hgvs';
 import { GenBankError, type TranscriptRecord } from './lib/genbank';
 import {
@@ -19,6 +21,15 @@ import {
 } from './lib/ncbi';
 import { analyzeVariant, VariantError } from './lib/variant';
 import {
+  assertWithinChromosome,
+  CnvError,
+  cnvWindow,
+  parseCnvPosition,
+  type CnvFormValues,
+  type CnvResult,
+} from './lib/cnv';
+import { fetchChromosome, fetchGenesInRange, UcscError } from './lib/ucsc';
+import {
   analysisRefs,
   buildComparisonRows,
   sameTranscript,
@@ -26,6 +37,9 @@ import {
 } from './lib/compare';
 
 const INITIAL: FormValues = { assembly: 'GRCh38', entries: [newEntry()] };
+const INITIAL_CNV: CnvFormValues = { position: '', type: 'loss' };
+
+type Mode = 'variant' | 'cnv';
 
 const ASSEMBLY_LABEL: Record<Assembly, string> = {
   GRCh38: 'GRCh38 / hg38',
@@ -42,7 +56,9 @@ function describeError(e: unknown): string {
     e instanceof HgvsError ||
     e instanceof VariantError ||
     e instanceof NcbiError ||
-    e instanceof GenBankError
+    e instanceof GenBankError ||
+    e instanceof CnvError ||
+    e instanceof UcscError
   ) {
     return e.message;
   }
@@ -56,6 +72,10 @@ export default function App() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(true);
+  const [mode, setMode] = useState<Mode>('variant');
+  const [cnvForm, setCnvForm] = useState<CnvFormValues>(INITIAL_CNV);
+  const [cnvResult, setCnvResult] = useState<CnvResult | null>(null);
+  const [cnvFormOpen, setCnvFormOpen] = useState(true);
 
   const transcriptCache = useRef(new Map<string, TranscriptRecord>());
   // 同じ遺伝子のバリアントを並べたときに MANE 検索を繰り返さない
@@ -205,6 +225,51 @@ export default function App() {
     }
   }, [form, analyzeOne]);
 
+  const runCnv = useCallback(async () => {
+    const id = ++requestId.current;
+    const assembly = form.assembly;
+    setError(null);
+
+    try {
+      // 通信の前に、入力の書式の誤りを検出する
+      const pos = parseCnvPosition(cnvForm.position);
+      setStatus(`${pos.chrom} の染色体情報を取得しています…`);
+      const chromosome = await fetchChromosome(assembly, pos.chrom);
+      if (id !== requestId.current) return;
+      assertWithinChromosome(pos.end, chromosome, ASSEMBLY_LABEL[assembly]);
+
+      const region = { chrom: pos.chrom, start: pos.start - 1, end: pos.end, type: cnvForm.type };
+      const view = cnvWindow(region, chromosome.length);
+
+      // 遺伝子は付加情報のため、取得に失敗しても位置の図は表示する
+      setStatus('範囲に含まれる遺伝子を取得しています…');
+      let genes: CnvResult['genes'] = null;
+      let geneError: string | null = null;
+      try {
+        genes = await fetchGenesInRange(assembly, pos.chrom, view.lo, view.hi);
+      } catch (e) {
+        geneError = describeError(e);
+      }
+      if (id !== requestId.current) return;
+
+      setCnvResult({ assembly, region, chromosome, window: view, genes, geneError });
+      setCnvFormOpen(false);
+    } catch (e) {
+      if (id !== requestId.current) return;
+      // 前の図を残すと、入力と食い違ったまま見えてしまうので消す
+      setCnvResult(null);
+      setError(describeError(e));
+      setCnvFormOpen(true);
+    }
+    setStatus(null);
+  }, [cnvForm, form.assembly]);
+
+  const switchMode = (next: Mode) => {
+    if (next === mode) return;
+    setMode(next);
+    setError(null);
+  };
+
   const busy = status !== null;
 
   const refs = useMemo(
@@ -227,86 +292,163 @@ export default function App() {
           <h1>Genome Variant Visualizer</h1>
           <p>
             遺伝子バリアント（HGVS.c）と参照配列を比較し、DNA・アミノ酸配列の変化を可視化します。
-            複数のバリアントを並べて比較できます。
+            複数のバリアントを並べて比較できるほか、CNV（コピー数変異）の染色体上の位置と範囲内の遺伝子も図示できます。
           </p>
         </div>
       </header>
 
       <main>
-        {active?.analysis && (
-          <SummaryHeader
-            analysis={active.analysis}
-            assembly={results!.assembly}
-            genomic={active.genomic}
-            genomicPending={active.genomicPending}
-            warnings={active.warnings}
-            tag={refs.length > 1 ? active.index : null}
-          />
-        )}
-
-        <section className={`panel form-panel${results ? ' compact' : ''}`}>
-          {results ? (
+        <div className="mode-tabs" role="tablist" aria-label="入力する変異の種類">
+          {(
+            [
+              ['variant', 'バリアント', 'HGVS.c 記法（置換・欠失・挿入など）'],
+              ['cnv', 'CNV', '染色体位置 + Loss / Gain'],
+            ] as const
+          ).map(([key, label, sub]) => (
             <button
+              key={key}
               type="button"
-              className="disclosure"
-              onClick={() => setFormOpen((o) => !o)}
-              aria-expanded={formOpen}
+              role="tab"
+              aria-selected={mode === key}
+              className={`mode-tab${mode === key ? ' on' : ''}`}
+              onClick={() => switchMode(key)}
+              disabled={busy}
             >
-              入力条件{formOpen ? 'を閉じる ▲' : 'を変更する ▼'}
+              <strong>{label}</strong>
+              <span>{sub}</span>
             </button>
-          ) : (
-            <h2>バリアントを入力</h2>
-          )}
-          {(formOpen || !results) && (
-            <VariantForm value={form} onChange={setForm} onSubmit={run} busy={busy} />
-          )}
-        </section>
+          ))}
+        </div>
 
-        {status && (
-          <div className="status" role="status">
-            <span className="spinner" aria-hidden="true" />
-            {status}
-          </div>
-        )}
-
-        {error && (
-          <div className="error" role="alert">
-            <strong>解析できませんでした</strong>
-            <p>{error}</p>
-          </div>
-        )}
-
-        {results && rows.length > 1 && (
-          <VariantTable
-            rows={rows}
-            subtitle={`リファレンスゲノム ${ASSEMBLY_LABEL[results.assembly]}`}
-            activeId={activeId}
-            onSelect={setActiveId}
-          />
-        )}
-
-        {refs.length > 0 && (
+        {mode === 'cnv' && (
           <>
-            {mapRefs.length > 0 && <OverviewMap refs={mapRefs} activeId={activeId} />}
-            <ChromosomeMap
-              entries={results!.entries}
-              assembly={results!.assembly}
-              assemblyLabel={ASSEMBLY_LABEL[results!.assembly]}
-              activeId={activeId}
-              showTags={refs.length > 1}
-              onSelect={setActiveId}
-            />
-            <DnaCompare refs={refs} activeId={activeId} canOverlay={canOverlay} />
-            <ProteinCompare refs={refs} activeId={activeId} canOverlay={canOverlay} />
-            <FastaExport refs={refs} />
+            {cnvResult && (
+              <CnvSummary result={cnvResult} assemblyLabel={ASSEMBLY_LABEL[cnvResult.assembly]} />
+            )}
+
+            <section className={`panel form-panel${cnvResult ? ' compact' : ''}`}>
+              {cnvResult ? (
+                <button
+                  type="button"
+                  className="disclosure"
+                  onClick={() => setCnvFormOpen((o) => !o)}
+                  aria-expanded={cnvFormOpen}
+                >
+                  入力条件{cnvFormOpen ? 'を閉じる ▲' : 'を変更する ▼'}
+                </button>
+              ) : (
+                <h2>CNV を入力</h2>
+              )}
+              {(cnvFormOpen || !cnvResult) && (
+                <CnvForm
+                  value={cnvForm}
+                  onChange={setCnvForm}
+                  assembly={form.assembly}
+                  onAssemblyChange={(assembly) => setForm((f) => ({ ...f, assembly }))}
+                  onSubmit={runCnv}
+                  busy={busy}
+                />
+              )}
+            </section>
+
+            {status && (
+              <div className="status" role="status">
+                <span className="spinner" aria-hidden="true" />
+                {status}
+              </div>
+            )}
+
+            {error && (
+              <div className="error" role="alert">
+                <strong>図示できませんでした</strong>
+                <p>{error}</p>
+              </div>
+            )}
+
+            {cnvResult && (
+              <CnvDetails result={cnvResult} assemblyLabel={ASSEMBLY_LABEL[cnvResult.assembly]} />
+            )}
           </>
         )}
 
-        {refs.length > 1 && !canOverlay && (
-          <p className="hint warn panel">
-            参照配列が異なるバリアントが含まれているため、配列の図は選択中の 1
-            件のみを表示しています。上の比較表で行を選ぶと切り替わります。
-          </p>
+        {mode === 'variant' && (
+          <>
+            {active?.analysis && (
+              <SummaryHeader
+                analysis={active.analysis}
+                assembly={results!.assembly}
+                genomic={active.genomic}
+                genomicPending={active.genomicPending}
+                warnings={active.warnings}
+                tag={refs.length > 1 ? active.index : null}
+              />
+            )}
+
+            <section className={`panel form-panel${results ? ' compact' : ''}`}>
+              {results ? (
+                <button
+                  type="button"
+                  className="disclosure"
+                  onClick={() => setFormOpen((o) => !o)}
+                  aria-expanded={formOpen}
+                >
+                  入力条件{formOpen ? 'を閉じる ▲' : 'を変更する ▼'}
+                </button>
+              ) : (
+                <h2>バリアントを入力</h2>
+              )}
+              {(formOpen || !results) && (
+                <VariantForm value={form} onChange={setForm} onSubmit={run} busy={busy} />
+              )}
+            </section>
+
+            {status && (
+              <div className="status" role="status">
+                <span className="spinner" aria-hidden="true" />
+                {status}
+              </div>
+            )}
+
+            {error && (
+              <div className="error" role="alert">
+                <strong>解析できませんでした</strong>
+                <p>{error}</p>
+              </div>
+            )}
+
+            {results && rows.length > 1 && (
+              <VariantTable
+                rows={rows}
+                subtitle={`リファレンスゲノム ${ASSEMBLY_LABEL[results.assembly]}`}
+                activeId={activeId}
+                onSelect={setActiveId}
+              />
+            )}
+
+            {refs.length > 0 && (
+              <>
+                {mapRefs.length > 0 && <OverviewMap refs={mapRefs} activeId={activeId} />}
+                <ChromosomeMap
+                  entries={results!.entries}
+                  assembly={results!.assembly}
+                  assemblyLabel={ASSEMBLY_LABEL[results!.assembly]}
+                  activeId={activeId}
+                  showTags={refs.length > 1}
+                  onSelect={setActiveId}
+                />
+                <DnaCompare refs={refs} activeId={activeId} canOverlay={canOverlay} />
+                <ProteinCompare refs={refs} activeId={activeId} canOverlay={canOverlay} />
+                <FastaExport refs={refs} />
+              </>
+            )}
+
+            {refs.length > 1 && !canOverlay && (
+              <p className="hint warn panel">
+                参照配列が異なるバリアントが含まれているため、配列の図は選択中の 1
+                件のみを表示しています。上の比較表で行を選ぶと切り替わります。
+              </p>
+            )}
+          </>
         )}
       </main>
 

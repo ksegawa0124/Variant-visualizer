@@ -4,6 +4,7 @@
  *
  *   npm run selftest
  */
+import { classifyGene, cnvWindow, parseCnvPosition } from '../src/lib/cnv';
 import { parseGenBank } from '../src/lib/genbank';
 import { parseHgvsC } from '../src/lib/hgvs';
 import { analyzeVariant } from '../src/lib/variant';
@@ -96,6 +97,59 @@ async function main(): Promise<void> {
       console.log(`\n${hgvs}\n  ok    拒否: ${(e as Error).message.slice(0, 80)}…`);
       pass += 1;
     }
+  }
+
+  // ---- CNV: 染色体位置の読み取り（1-based・両端を含む）
+  console.log('\nCNV の入力解析');
+  const pos = (input: string) => {
+    const p = parseCnvPosition(input);
+    return `${p.chrom}:${p.start}-${p.end}`;
+  };
+  check('chr17:43,044,295-43,125,364', pos('chr17:43,044,295-43,125,364'), 'chr17:43044295-43125364');
+  check('染色体名の chr 省略・.. 区切り', pos('17:100..200'), 'chr17:100-200');
+  check('空白区切り・小文字の x', pos('chrx 1000 2000'), 'chrX:1000-2000');
+  check('全角数字', pos('chr1：１００－２００'), 'chr1:100-200');
+  for (const bad of ['', 'foo', 'chr23:1-2', 'chrM:1-2', 'chr1:0-10', 'chr1:200-100']) {
+    try {
+      parseCnvPosition(bad);
+      console.log(`  FAIL  拒否されるべき入力: "${bad}"`);
+      fail += 1;
+    } catch {
+      console.log(`  ok    拒否: "${bad}"`);
+      pass += 1;
+    }
+  }
+
+  // ---- CNV: 表示範囲は前後 5%、染色体の端を超えない
+  const win = cnvWindow({ start: 1000, end: 11000 }, 1_000_000);
+  check('前後 5% の余白（下端）', win.lo, 500);
+  check('前後 5% の余白（上端）', win.hi, 11500);
+  check('染色体の先頭で切る', cnvWindow({ start: 100, end: 10100 }, 1_000_000).lo, 0);
+  check('染色体の末尾で切る', cnvWindow({ start: 990_000, end: 999_900 }, 1_000_000).hi, 1_000_000);
+
+  // ---- CNV: 遺伝子との位置関係（範囲 [1000, 2000)）
+  const gene = (txStart: number, txEnd: number) => ({
+    accession: 'NM_TEST.1',
+    gene: 'TEST',
+    chrom: 'chr1',
+    strand: '+' as const,
+    txStart,
+    txEnd,
+    cdsStart: txStart,
+    cdsEnd: txEnd,
+    exons: [{ start: txStart, end: txEnd }],
+  });
+  const region = { start: 1000, end: 2000 };
+  for (const [name, g, want] of [
+    ['範囲内に収まる', gene(1200, 1800), 'contained'],
+    ['境界に一致', gene(1000, 2000), 'contained'],
+    ['開始側で切断', gene(500, 1500), 'left'],
+    ['終了側で切断', gene(1500, 2500), 'right'],
+    ['CNV が遺伝子内', gene(500, 2500), 'spans'],
+    ['左に隣接', gene(500, 1000), 'outside'],
+    ['右に隣接', gene(2000, 2500), 'outside'],
+  ] as const) {
+    check(name, classifyGene(g, region).relation, want);
   }
 
   console.log(`\n==== pass=${pass} fail=${fail} ====`);

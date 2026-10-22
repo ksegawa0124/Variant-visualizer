@@ -78,13 +78,13 @@ export interface RenderedMap {
 
 // ---------- 定数 ----------
 
-const W = 960;
-const LEFT = 128;
+export const W = 960;
+export const LEFT = 128;
 const RIGHT = 16;
-const CW = W - LEFT - RIGHT;
-const GAP = 24;
+export const CW = W - LEFT - RIGHT;
+export const GAP = 24;
 const CHIP_H = 15;
-const FONT = "'Helvetica Neue', Arial, 'Hiragino Sans', 'Yu Gothic', 'Noto Sans JP', sans-serif";
+export const FONT = "'Helvetica Neue', Arial, 'Hiragino Sans', 'Yu Gothic', 'Noto Sans JP', sans-serif";
 
 /** 近くのバリアントをまとめて「変異の周辺」の窓に入れる距離 */
 const CLUSTER_BP = 2000;
@@ -105,9 +105,9 @@ const STAIN: Record<string, string> = {
 // ---------- 小道具 ----------
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ESC[c]);
-const n1 = (n: number) => String(Math.round(n * 10) / 10);
-const commas = (n: number) => Math.round(n).toLocaleString('en-US');
+export const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ESC[c]);
+export const n1 = (n: number) => String(Math.round(n * 10) / 10);
+export const commas = (n: number) => Math.round(n).toLocaleString('en-US');
 
 export function formatSpan(bp: number): string {
   if (bp >= 1e6) return `${(bp / 1e6).toFixed(bp >= 1e7 ? 0 : 1)} Mb`;
@@ -138,17 +138,17 @@ function niceStep(span: number, target: number): number {
   return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
 }
 
-type Scale = (pos: number) => number;
+export type Scale = (pos: number) => number;
 
-function makeScale(lo: number, hi: number): Scale {
+export function makeScale(lo: number, hi: number): Scale {
   return (pos) => LEFT + ((pos - lo) / (hi - lo)) * CW;
 }
 
-const clampX = (x: number) => Math.min(LEFT + CW, Math.max(LEFT, x));
+export const clampX = (x: number) => Math.min(LEFT + CW, Math.max(LEFT, x));
 
 // ---------- 部品 ----------
 
-function text(
+export function text(
   x: number,
   y: number,
   s: string,
@@ -159,7 +159,7 @@ function text(
   return `<text x="${n1(x)}" y="${n1(y)}" font-size="${size}" style="fill:${fill}" ${extra}>${esc(s)}</text>`;
 }
 
-function ruler(out: string[], x: Scale, lo: number, hi: number, y: number, theme: MapTheme): void {
+export function ruler(out: string[], x: Scale, lo: number, hi: number, y: number, theme: MapTheme): void {
   const step = niceStep(hi - lo, 6);
   out.push(
     `<line x1="${LEFT}" x2="${LEFT + CW}" y1="${y}" y2="${y}" style="stroke:${theme.line};stroke-width:1"/>`,
@@ -337,7 +337,7 @@ function drawGene(
 }
 
 /** 上の段で選んだ範囲を枠で囲み、次の段へ向けて広がる帯でつなぐ */
-function drawZoomLink(
+export function drawZoomLink(
   out: string[],
   x1: number,
   x2: number,
@@ -353,7 +353,7 @@ function drawZoomLink(
   );
 }
 
-function trackHead(
+export function trackHead(
   out: string[],
   y: number,
   title: string,
@@ -368,12 +368,14 @@ function trackHead(
 
 // ---------- 3 段の描画 ----------
 
-function drawIdeogram(
+export function drawIdeogram(
   out: string[],
   model: MapModel,
   y: number,
   theme: MapTheme,
   focus: { lo: number; hi: number } | null,
+  /** 染色体の上に色を重ねて強調する範囲（CNV など） */
+  highlight?: { lo: number; hi: number; color: string },
 ): { height: number; boxX1: number; boxX2: number; barBottom: number } {
   const HEIGHT = 62;
   const { chromosome: chr, variants, activeId } = model;
@@ -419,6 +421,12 @@ function drawIdeogram(
       `<rect x="${n1(bx)}" y="${barY}" width="${n1(x(b.end) - bx + 0.4)}" height="${barH}" style="fill:${STAIN[b.stain] ?? STAIN.gneg}"><title>${esc(
         `${chr.name.replace(/^chr/, '')}${b.name}`,
       )}</title></rect>`,
+    );
+  }
+  if (highlight) {
+    const hx = x(highlight.lo);
+    out.push(
+      `<rect x="${n1(hx)}" y="${barY}" width="${n1(Math.max(3, x(highlight.hi) - hx))}" height="${barH}" style="fill:${highlight.color}" fill-opacity="0.8"/>`,
     );
   }
   out.push('</g>');

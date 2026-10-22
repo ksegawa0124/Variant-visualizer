@@ -164,6 +164,37 @@ export function fetchGeneLayout(
   });
 }
 
+const regionGenes = new Map<string, Promise<GeneLayout[]>>();
+
+/**
+ * 指定した範囲と重なる遺伝子を、遺伝子ごとに代表 1 転写産物で取得する。
+ * RefSeq Select（MANE Select を含む）の小さなトラックを使うので、数十 Mb の範囲でも軽い。
+ * start/end は 0-based・半開区間。
+ */
+export function fetchGenesInRange(
+  assembly: Assembly,
+  chrom: string,
+  start: number,
+  end: number,
+): Promise<GeneLayout[]> {
+  const db = UCSC_DB[assembly];
+  return cached(regionGenes, `${db}:${chrom}:${start}-${end}`, async () => {
+    const track = 'ncbiRefSeqSelect';
+    const data = await getTrack<Record<string, RefSeqRow[] | undefined>>(
+      `genome=${db};track=${track};chrom=${chrom};start=${start};end=${end}`,
+    );
+    // 同じ遺伝子に複数の転写産物があるときは、最も長いものを残す
+    const byGene = new Map<string, GeneLayout>();
+    for (const row of data[track] ?? []) {
+      const layout = toLayout(row);
+      const key = layout.gene || layout.accession;
+      const prev = byGene.get(key);
+      if (!prev || layout.txEnd - layout.txStart > prev.txEnd - prev.txStart) byGene.set(key, layout);
+    }
+    return [...byGene.values()].sort((a, b) => a.txStart - b.txStart || a.txEnd - b.txEnd);
+  });
+}
+
 /** UCSC Genome Browser で同じ領域を開く URL */
 export function ucscBrowserUrl(
   assembly: Assembly,
