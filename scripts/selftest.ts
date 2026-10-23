@@ -4,7 +4,13 @@
  *
  *   npm run selftest
  */
-import { classifyGene, cnvWindow, parseCnvPosition } from '../src/lib/cnv';
+import {
+  allGenesToTsv,
+  classifyGene,
+  cnvWindow,
+  parseBulkCnvs,
+  parseCnvPosition,
+} from '../src/lib/cnv';
 import { parseGenBank } from '../src/lib/genbank';
 import { parseHgvsC } from '../src/lib/hgvs';
 import { analyzeVariant } from '../src/lib/variant';
@@ -151,6 +157,60 @@ async function main(): Promise<void> {
   ] as const) {
     check(name, classifyGene(g, region).relation, want);
   }
+
+  // ---- CNV: まとめて入力（1 行 1 CNV、種類は行内の語から判定）
+  console.log('\nCNV のまとめて入力');
+  const bulk = parseBulkCnvs(
+    [
+      'chr22:18,924,000-21,465,000 Loss',
+      '16:29600000-30200000, gain',
+      '# コメント',
+      '',
+      'chr17:43044295-43125364（欠失）',
+      'chrX 1000 2000 dup',
+      'chr1:100-200',
+    ].join('\n'),
+  );
+  check('種類つきの行だけ読み取る', bulk.entries.length, 4);
+  check(
+    'Loss の判定と位置の切り出し',
+    JSON.stringify(bulk.entries[0]),
+    '{"position":"chr22:18,924,000-21,465,000","type":"loss"}',
+  );
+  check(
+    'gain（小文字・カンマ区切り）',
+    JSON.stringify(bulk.entries[1]),
+    '{"position":"16:29600000-30200000","type":"gain"}',
+  );
+  check(
+    '日本語の「欠失」',
+    JSON.stringify(bulk.entries[2]),
+    '{"position":"chr17:43044295-43125364","type":"loss"}',
+  );
+  check('dup は Gain', bulk.entries[3].type, 'gain');
+  check('種類のない行は読み飛ばす', bulk.skipped.join('|'), 'chr1:100-200');
+  check(
+    '読み取った位置がそのまま解析できる',
+    bulk.entries.map((e) => pos(e.position)).join(' '),
+    'chr22:18924000-21465000 chr16:29600000-30200000 chr17:43044295-43125364 chrX:1000-2000',
+  );
+
+  // ---- CNV: 複数 CNV の遺伝子 TSV（CNV を示す列が付く）
+  const tsv = allGenesToTsv([
+    {
+      no: 1,
+      region: { chrom: 'chr1', start: 999, end: 2000, type: 'loss' },
+      hits: [classifyGene(gene(1200, 1800), region)],
+    },
+    {
+      no: 2,
+      region: { chrom: 'chr1', start: 999, end: 2000, type: 'gain' },
+      hits: [classifyGene(gene(5000, 6000), region)],
+    },
+  ]);
+  const tsvLines = tsv.trimEnd().split('\n');
+  check('TSV: ヘッダ + 範囲内の遺伝子だけ', tsvLines.length, 2);
+  check('TSV: CNV 列', tsvLines[1].split('\t').slice(0, 3).join(','), '1,Loss,chr1:1000-2000');
 
   console.log(`\n==== pass=${pass} fail=${fail} ====`);
   if (fail > 0) process.exit(1);

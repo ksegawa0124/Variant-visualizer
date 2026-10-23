@@ -26,11 +26,23 @@ export interface CnvRegion {
   type: CnvType;
 }
 
-/** 入力欄の内容（App が保持する） */
-export interface CnvFormValues {
+/** 入力欄 1 行ぶんの内容（App が保持する） */
+export interface CnvEntry {
+  /** React のキーと解析結果の突き合わせに使う安定した ID */
+  id: string;
   position: string;
   type: CnvType;
 }
+
+let nextId = 0;
+
+export function newCnvEntry(init: Partial<Omit<CnvEntry, 'id'>> = {}): CnvEntry {
+  nextId += 1;
+  return { id: `c${nextId}`, position: '', type: 'loss', ...init };
+}
+
+/** 一度に図示できる CNV 数の上限（UCSC への連続問い合わせを抑えるため） */
+export const MAX_CNVS = 8;
 
 export interface CnvResult {
   assembly: Assembly;
@@ -41,6 +53,16 @@ export interface CnvResult {
   /** 取得に失敗したときは null */
   genes: GeneLayout[] | null;
   geneError: string | null;
+}
+
+/** CNV 1 件ぶんの結果。失敗はその CNV に閉じ込め、ほかの CNV は図示する */
+export interface CnvEntryResult {
+  id: string;
+  /** 入力順（0 始まり） */
+  index: number;
+  input: { position: string; type: CnvType };
+  result: CnvResult | null;
+  error: string | null;
 }
 
 /** CNV の範囲の前後に足す余白（CNV の長さに対する割合） */
@@ -82,6 +104,42 @@ export function parseCnvPosition(input: string): { chrom: string; start: number;
     );
   }
   return { chrom: `chr${name}`, start, end };
+}
+
+const TYPE_WORD =
+  /(?<![A-Za-z])(loss|del(?:etion)?|gain|dup(?:lication)?|amp(?:lification)?)(?![A-Za-z])|(欠失|減少|ロス|増加|増幅|重複|ゲイン)/i;
+const LOSS_WORD = /^(loss|del|deletion|欠失|減少|ロス)$/i;
+
+/**
+ * 「まとめて入力」欄の 1 行 1 CNV を読み取る。種類は行内の語から判定する。
+ *   chr17:43,044,295-43,125,364 Loss
+ *   17:15000000-16400000, gain
+ *   chr22 18924000 21465000 欠失
+ * 種類が書かれていない行は、Loss / Gain を取り違えないよう読み飛ばして skipped に返す。
+ * 位置の書式の誤りはここでは判定せず、入力欄に反映したあとの行ごとのメッセージで示す。
+ */
+export function parseBulkCnvs(text: string): {
+  entries: Array<{ position: string; type: CnvType }>;
+  skipped: string[];
+} {
+  const entries: Array<{ position: string; type: CnvType }> = [];
+  const skipped: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.normalize('NFKC').trim();
+    if (line === '' || line.startsWith('#')) continue;
+    const m = TYPE_WORD.exec(line);
+    if (!m) {
+      skipped.push(line);
+      continue;
+    }
+    const word = m[1] ?? m[2];
+    const position = (line.slice(0, m.index) + ' ' + line.slice(m.index + m[0].length))
+      .replace(/[\s,;、()（）[\]]+$/g, '')
+      .replace(/^[\s,;、()（）[\]]+/g, '')
+      .replace(/\s{2,}/g, ' ');
+    entries.push({ position, type: LOSS_WORD.test(word) ? 'loss' : 'gain' });
+  }
+  return { entries, skipped };
 }
 
 /** 入力した範囲が、選んだリファレンスゲノムの染色体に収まっているか確認する */
@@ -183,35 +241,56 @@ export function exonText(h: GeneHit): string {
   return count === total ? `全 ${total} エクソン` : `エクソン ${range}（${count}/${total}）`;
 }
 
+const TSV_HEADER = [
+  '遺伝子',
+  '参照配列',
+  '染色体',
+  '開始(1-based)',
+  '終了',
+  '鎖',
+  '種類',
+  'CNVとの関係',
+  '重なり(bp)',
+  '重なるエクソン',
+];
+
+function geneRows(hits: GeneHit[]): Array<Array<string | number>> {
+  return hits
+    .filter((h) => h.relation !== 'outside')
+    .map((h) => [
+      h.gene.gene,
+      h.gene.accession,
+      h.gene.chrom,
+      h.gene.txStart + 1,
+      h.gene.txEnd,
+      h.gene.strand,
+      h.coding ? 'タンパク質コード' : '非コード',
+      RELATION_LABEL[h.relation],
+      h.overlap,
+      exonText(h),
+    ]);
+}
+
 /** 範囲に含まれる遺伝子の一覧をタブ区切りテキストにする（表計算ソフトに貼り付けられる） */
 export function genesToTsv(hits: GeneHit[]): string {
-  const header = [
-    '遺伝子',
-    '参照配列',
-    '染色体',
-    '開始(1-based)',
-    '終了',
-    '鎖',
-    '種類',
-    'CNVとの関係',
-    '重なり(bp)',
-    '重なるエクソン',
-  ];
-  const rows = hits
-    .filter((h) => h.relation !== 'outside')
-    .map((h) =>
+  const rows = geneRows(hits).map((r) => r.join('\t'));
+  return [TSV_HEADER.join('\t'), ...rows].join('\n') + '\n';
+}
+
+/** 複数の CNV の遺伝子を、CNV を示す列を先頭に付けて 1 つの表にまとめる */
+export function allGenesToTsv(
+  items: Array<{ no: number; region: CnvRegion; hits: GeneHit[] }>,
+): string {
+  const header = ['CNV', 'CNVの種類', 'CNVの範囲(1-based)', ...TSV_HEADER];
+  const rows = items.flatMap(({ no, region, hits }) =>
+    geneRows(hits).map((r) =>
       [
-        h.gene.gene,
-        h.gene.accession,
-        h.gene.chrom,
-        h.gene.txStart + 1,
-        h.gene.txEnd,
-        h.gene.strand,
-        h.coding ? 'タンパク質コード' : '非コード',
-        RELATION_LABEL[h.relation],
-        h.overlap,
-        exonText(h),
+        no,
+        CNV_INFO[region.type].label,
+        `${region.chrom}:${region.start + 1}-${region.end}`,
+        ...r,
       ].join('\t'),
-    );
+    ),
+  );
   return [header.join('\t'), ...rows].join('\n') + '\n';
 }

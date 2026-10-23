@@ -9,7 +9,7 @@ import { DnaCompare } from './components/DnaCompare';
 import { ProteinCompare } from './components/ProteinCompare';
 import { FastaExport } from './components/FastaExport';
 import { CnvForm } from './components/CnvForm';
-import { CnvDetails, CnvSummary } from './components/CnvView';
+import { CnvBlock, CnvOverview } from './components/CnvView';
 import { HgvsError, parseHgvsC } from './lib/hgvs';
 import { GenBankError, type TranscriptRecord } from './lib/genbank';
 import {
@@ -24,8 +24,10 @@ import {
   assertWithinChromosome,
   CnvError,
   cnvWindow,
+  newCnvEntry,
   parseCnvPosition,
-  type CnvFormValues,
+  type CnvEntry,
+  type CnvEntryResult,
   type CnvResult,
 } from './lib/cnv';
 import { fetchChromosome, fetchGenesInRange, UcscError } from './lib/ucsc';
@@ -37,7 +39,7 @@ import {
 } from './lib/compare';
 
 const INITIAL: FormValues = { assembly: 'GRCh38', entries: [newEntry()] };
-const INITIAL_CNV: CnvFormValues = { position: '', type: 'loss' };
+const INITIAL_CNV: CnvEntry[] = [newCnvEntry()];
 
 type Mode = 'variant' | 'cnv';
 
@@ -49,6 +51,11 @@ const ASSEMBLY_LABEL: Record<Assembly, string> = {
 interface Results {
   assembly: Assembly;
   entries: EntryResult[];
+}
+
+interface CnvResults {
+  assembly: Assembly;
+  entries: CnvEntryResult[];
 }
 
 function describeError(e: unknown): string {
@@ -73,8 +80,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(true);
   const [mode, setMode] = useState<Mode>('variant');
-  const [cnvForm, setCnvForm] = useState<CnvFormValues>(INITIAL_CNV);
-  const [cnvResult, setCnvResult] = useState<CnvResult | null>(null);
+  const [cnvForm, setCnvForm] = useState<CnvEntry[]>(INITIAL_CNV);
+  const [cnvResults, setCnvResults] = useState<CnvResults | null>(null);
   const [cnvFormOpen, setCnvFormOpen] = useState(true);
 
   const transcriptCache = useRef(new Map<string, TranscriptRecord>());
@@ -225,44 +232,78 @@ export default function App() {
     }
   }, [form, analyzeOne]);
 
+  /** CNV 1 件を図示用に整える（失敗はその CNV の結果に閉じ込める） */
+  const analyzeCnv = useCallback(
+    async (entry: CnvEntry, index: number, assembly: Assembly): Promise<CnvEntryResult> => {
+      const base = {
+        id: entry.id,
+        index,
+        input: { position: entry.position.trim(), type: entry.type },
+      };
+      try {
+        // 通信の前に、入力の書式の誤りを検出する
+        const pos = parseCnvPosition(entry.position);
+        const chromosome = await fetchChromosome(assembly, pos.chrom);
+        assertWithinChromosome(pos.end, chromosome, ASSEMBLY_LABEL[assembly]);
+
+        const region = { chrom: pos.chrom, start: pos.start - 1, end: pos.end, type: entry.type };
+        const view = cnvWindow(region, chromosome.length);
+
+        // 遺伝子は付加情報のため、取得に失敗しても位置の図は表示する
+        let genes: CnvResult['genes'] = null;
+        let geneError: string | null = null;
+        try {
+          genes = await fetchGenesInRange(assembly, pos.chrom, view.lo, view.hi);
+        } catch (e) {
+          geneError = describeError(e);
+        }
+        const result: CnvResult = { assembly, region, chromosome, window: view, genes, geneError };
+        return { ...base, result, error: null };
+      } catch (e) {
+        return { ...base, result: null, error: describeError(e) };
+      }
+    },
+    [],
+  );
+
   const runCnv = useCallback(async () => {
     const id = ++requestId.current;
     const assembly = form.assembly;
+    const targets = cnvForm.filter((e) => e.position.trim() !== '');
     setError(null);
 
-    try {
-      // 通信の前に、入力の書式の誤りを検出する
-      const pos = parseCnvPosition(cnvForm.position);
-      setStatus(`${pos.chrom} の染色体情報を取得しています…`);
-      const chromosome = await fetchChromosome(assembly, pos.chrom);
-      if (id !== requestId.current) return;
-      assertWithinChromosome(pos.end, chromosome, ASSEMBLY_LABEL[assembly]);
+    if (targets.length === 0) {
+      setStatus(null);
+      setError('染色体位置を入力してください。');
+      return;
+    }
 
-      const region = { chrom: pos.chrom, start: pos.start - 1, end: pos.end, type: cnvForm.type };
-      const view = cnvWindow(region, chromosome.length);
-
-      // 遺伝子は付加情報のため、取得に失敗しても位置の図は表示する
-      setStatus('範囲に含まれる遺伝子を取得しています…');
-      let genes: CnvResult['genes'] = null;
-      let geneError: string | null = null;
-      try {
-        genes = await fetchGenesInRange(assembly, pos.chrom, view.lo, view.hi);
-      } catch (e) {
-        geneError = describeError(e);
-      }
+    // UCSC の負荷を抑えるため 1 件ずつ順に取得する
+    const entries: CnvEntryResult[] = [];
+    for (const [i, entry] of targets.entries()) {
+      setStatus(
+        targets.length > 1
+          ? `(${i + 1}/${targets.length}) ${entry.position.trim()} の染色体情報と遺伝子を取得しています…`
+          : '染色体情報と範囲に含まれる遺伝子を取得しています…',
+      );
+      const result = await analyzeCnv(entry, i, assembly);
       if (id !== requestId.current) return;
-
-      setCnvResult({ assembly, region, chromosome, window: view, genes, geneError });
-      setCnvFormOpen(false);
-    } catch (e) {
-      if (id !== requestId.current) return;
-      // 前の図を残すと、入力と食い違ったまま見えてしまうので消す
-      setCnvResult(null);
-      setError(describeError(e));
-      setCnvFormOpen(true);
+      entries.push(result);
     }
     setStatus(null);
-  }, [cnvForm, form.assembly]);
+
+    const failed = entries.filter((e) => e.error);
+    if (failed.length === entries.length && entries.length === 1) {
+      // 前の図を残すと、入力と食い違ったまま見えてしまうので消す
+      setCnvResults(null);
+      setError(failed[0].error);
+      setCnvFormOpen(true);
+      return;
+    }
+    setCnvResults({ assembly, entries });
+    // 全件が失敗したときは、各 CNV のメッセージを見ながら直せるよう入力欄を開いたままにする
+    setCnvFormOpen(failed.length === entries.length);
+  }, [cnvForm, form.assembly, analyzeCnv]);
 
   const switchMode = (next: Mode) => {
     if (next === mode) return;
@@ -322,12 +363,8 @@ export default function App() {
 
         {mode === 'cnv' && (
           <>
-            {cnvResult && (
-              <CnvSummary result={cnvResult} assemblyLabel={ASSEMBLY_LABEL[cnvResult.assembly]} />
-            )}
-
-            <section className={`panel form-panel${cnvResult ? ' compact' : ''}`}>
-              {cnvResult ? (
+            <section className={`panel form-panel${cnvResults ? ' compact' : ''}`}>
+              {cnvResults ? (
                 <button
                   type="button"
                   className="disclosure"
@@ -339,7 +376,7 @@ export default function App() {
               ) : (
                 <h2>CNV を入力</h2>
               )}
-              {(cnvFormOpen || !cnvResult) && (
+              {(cnvFormOpen || !cnvResults) && (
                 <CnvForm
                   value={cnvForm}
                   onChange={setCnvForm}
@@ -365,9 +402,21 @@ export default function App() {
               </div>
             )}
 
-            {cnvResult && (
-              <CnvDetails result={cnvResult} assemblyLabel={ASSEMBLY_LABEL[cnvResult.assembly]} />
+            {cnvResults && cnvResults.entries.length > 1 && (
+              <CnvOverview
+                entries={cnvResults.entries}
+                assemblyLabel={ASSEMBLY_LABEL[cnvResults.assembly]}
+              />
             )}
+
+            {cnvResults?.entries.map((entry) => (
+              <CnvBlock
+                key={entry.id}
+                entry={entry}
+                assemblyLabel={ASSEMBLY_LABEL[cnvResults.assembly]}
+                multi={cnvResults.entries.length > 1}
+              />
+            ))}
           </>
         )}
 

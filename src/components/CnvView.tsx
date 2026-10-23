@@ -1,10 +1,12 @@
 import { useMemo } from 'react';
 import {
+  allGenesToTsv,
   CNV_INFO,
   classifyGenes,
   exonText,
   genesToTsv,
   RELATION_LABEL,
+  type CnvEntryResult,
   type CnvResult,
 } from '../lib/cnv';
 import { cytobandLabel, formatRange, formatSpan, PRINT_THEME, SCREEN_THEME } from '../lib/chrommap';
@@ -17,6 +19,8 @@ import { ExportButtons } from './ExportButtons';
 interface Props {
   result: CnvResult;
   assemblyLabel: string;
+  /** 複数の CNV を並べるときの番号（1 始まり）。1 件だけなら省略 */
+  no?: number;
 }
 
 /** 例: chr17 → 17 番染色体 / chrX → X 染色体 */
@@ -39,7 +43,7 @@ function useCnvModel(result: CnvResult) {
 }
 
 /** ページ上部の概要カード（種類・範囲・サイズ・含まれる遺伝子の数） */
-export function CnvSummary({ result, assemblyLabel }: Props) {
+export function CnvSummary({ result, assemblyLabel, no }: Props) {
   const { region, chromosome } = result;
   const info = CNV_INFO[region.type];
   const { inside } = useCnvModel(result);
@@ -56,6 +60,11 @@ export function CnvSummary({ result, assemblyLabel }: Props) {
     >
       <div className="summary-variant">
         <h2>
+          {no !== undefined && (
+            <span className="entry-tag" style={{ background: info.color }}>
+              #{no}
+            </span>
+          )}
           <span className="cnv-type" style={{ background: info.color }}>
             {info.label}
           </span>
@@ -100,7 +109,7 @@ export function CnvSummary({ result, assemblyLabel }: Props) {
 }
 
 /** 染色体上の位置と周辺の図、および範囲内の遺伝子の一覧 */
-export function CnvDetails({ result, assemblyLabel }: Props) {
+export function CnvDetails({ result, assemblyLabel, no }: Props) {
   const { region, chromosome, window: win, assembly } = result;
   const info = CNV_INFO[region.type];
   const { inside, model } = useCnvModel(result);
@@ -136,7 +145,7 @@ export function CnvDetails({ result, assemblyLabel }: Props) {
     <>
       <section className="panel">
         <div className="panel-head">
-          <h3>染色体上の位置と周辺の遺伝子</h3>
+          <h3>{no !== undefined ? `#${no} ` : ''}染色体上の位置と周辺の遺伝子</h3>
           <span className="field-hint">
             染色体 → CNV の範囲（前後 5% を含む）の順に拡大しています
           </span>
@@ -192,7 +201,9 @@ export function CnvDetails({ result, assemblyLabel }: Props) {
       {result.genes && (
         <section className="panel">
           <div className="panel-head">
-            <h3>範囲に重なる遺伝子（{rows.length}）</h3>
+            <h3>
+              {no !== undefined ? `#${no} ` : ''}範囲に重なる遺伝子（{rows.length}）
+            </h3>
             <span className="field-hint">完全に含まれる遺伝子、ブレークポイントで切断される遺伝子の順（それぞれ位置の昇順）</span>
           </div>
 
@@ -260,5 +271,174 @@ export function CnvDetails({ result, assemblyLabel }: Props) {
         </section>
       )}
     </>
+  );
+}
+
+/** 複数の CNV のうち 1 件ぶん（概要・図・遺伝子一覧）。失敗した CNV はエラーを示す */
+export function CnvBlock({
+  entry,
+  assemblyLabel,
+  multi,
+}: {
+  entry: CnvEntryResult;
+  assemblyLabel: string;
+  multi: boolean;
+}) {
+  const no = multi ? entry.index + 1 : undefined;
+  return (
+    <div className="cnv-block" id={`cnv-${entry.index + 1}`}>
+      {entry.result ? (
+        <>
+          <CnvSummary result={entry.result} assemblyLabel={assemblyLabel} no={no} />
+          <CnvDetails result={entry.result} assemblyLabel={assemblyLabel} no={no} />
+        </>
+      ) : (
+        <div className="error" role="alert">
+          <strong>
+            {no !== undefined ? `#${no} ` : ''}図示できませんでした
+            <span className="cnv-error-input">
+              {CNV_INFO[entry.input.type].label}　{entry.input.position}
+            </span>
+          </strong>
+          <p>{entry.error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function jumpTo(no: number) {
+  document.getElementById(`cnv-${no}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/** 複数の CNV を 1 枚の表で見比べる。行を押すとその CNV の図へ移動する */
+export function CnvOverview({
+  entries,
+  assemblyLabel,
+}: {
+  entries: CnvEntryResult[];
+  assemblyLabel: string;
+}) {
+  const rows = useMemo(
+    () =>
+      entries.map((e) => {
+        const r = e.result;
+        const hits = r?.genes ? classifyGenes(r.genes, r.region).filter((h) => h.relation !== 'outside') : null;
+        return { entry: e, hits };
+      }),
+    [entries],
+  );
+
+  const exportable = rows.filter(
+    (r): r is { entry: CnvEntryResult & { result: CnvResult }; hits: NonNullable<typeof r.hits> } =>
+      r.entry.result !== null && r.hits !== null,
+  );
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h3>CNV の一覧（{entries.length}）</h3>
+        <span className="field-hint">リファレンスゲノム {assemblyLabel}</span>
+      </div>
+
+      <p className="select-hint">
+        <span className="select-hint-icon" aria-hidden="true">
+          ↓
+        </span>
+        <span>
+          <strong>表の行をクリック</strong>
+          すると、下のその CNV の図と遺伝子一覧へ移動します。CNV ごとに、染色体上の位置と周辺の遺伝子を図示しています。
+        </span>
+      </p>
+
+      <div className="table-scroll">
+        <table className="compare-table cnv-overview">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>種類</th>
+              <th>染色体位置</th>
+              <th>バンド</th>
+              <th>サイズ</th>
+              <th>完全に含まれる遺伝子</th>
+              <th>切断される遺伝子</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ entry, hits }) => {
+              const r = entry.result;
+              const no = entry.index + 1;
+              const go = () => jumpTo(no);
+              const onKey = (ev: React.KeyboardEvent) => {
+                if (ev.key === 'Enter' || ev.key === ' ') {
+                  ev.preventDefault();
+                  go();
+                }
+              };
+              if (!r) {
+                return (
+                  <tr key={entry.id} tabIndex={0} role="button" onClick={go} onKeyDown={onKey}>
+                    <td>
+                      <span className="entry-tag small" style={{ background: CNV_INFO[entry.input.type].color }}>
+                        #{no}
+                      </span>
+                    </td>
+                    <td>{CNV_INFO[entry.input.type].label}</td>
+                    <td className="mono small">{entry.input.position}</td>
+                    <td colSpan={4} className="cnv-row-error">
+                      図示できませんでした: {entry.error}
+                    </td>
+                  </tr>
+                );
+              }
+              const info = CNV_INFO[r.region.type];
+              const contained = hits?.filter((h) => h.relation === 'contained') ?? [];
+              const cut = hits?.filter((h) => h.relation !== 'contained') ?? [];
+              return (
+                <tr key={entry.id} tabIndex={0} role="button" onClick={go} onKeyDown={onKey}>
+                  <td>
+                    <span className="entry-tag small" style={{ background: info.color }}>
+                      #{no}
+                    </span>
+                  </td>
+                  <td className="strong" style={{ color: info.color }}>
+                    {info.label}
+                  </td>
+                  <td className="mono small">{formatRange(r.region.chrom, r.region.start, r.region.end)}</td>
+                  <td>{cytobandLabel(r.chromosome, r.region.start, r.region.end)}</td>
+                  <td>{formatSpan(r.region.end - r.region.start)}</td>
+                  <td>{hits ? contained.length : '—'}</td>
+                  <td>{hits ? cut.length : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {exportable.length > 0 && (
+        <div className="downloads">
+          <button
+            type="button"
+            className="ghost"
+            onClick={() =>
+              downloadText(
+                allGenesToTsv(
+                  exportable.map((r) => ({
+                    no: r.entry.index + 1,
+                    region: r.entry.result.region,
+                    hits: r.hits,
+                  })),
+                ),
+                'CNV_genes_all.tsv',
+                'text/tab-separated-values',
+              )
+            }
+          >
+            全 CNV の遺伝子リストを TSV で保存
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
